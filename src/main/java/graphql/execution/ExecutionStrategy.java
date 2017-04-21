@@ -10,48 +10,40 @@ import graphql.execution.instrumentation.parameters.FieldFetchParameters;
 import graphql.execution.instrumentation.parameters.FieldParameters;
 import graphql.language.Directive;
 import graphql.language.Field;
-import graphql.schema.DataFetchingEnvironment;
-import graphql.schema.DataFetchingEnvironmentImpl;
-import graphql.schema.GraphQLEnumType;
-import graphql.schema.GraphQLFieldDefinition;
-import graphql.schema.GraphQLInterfaceType;
-import graphql.schema.GraphQLList;
-import graphql.schema.GraphQLNonNull;
-import graphql.schema.GraphQLObjectType;
-import graphql.schema.GraphQLScalarType;
-import graphql.schema.GraphQLSchema;
-import graphql.schema.GraphQLType;
-import graphql.schema.GraphQLUnionType;
+import graphql.schema.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
 
 import static graphql.Directives.CalculationDirective;
+import static graphql.execution.TypeInfo.newTypeInfo;
 import static graphql.introspection.Introspection.SchemaMetaFieldDef;
 import static graphql.introspection.Introspection.TypeMetaFieldDef;
 import static graphql.introspection.Introspection.TypeNameMetaFieldDef;
 
 public abstract class ExecutionStrategy {
+
     private static final Logger log = LoggerFactory.getLogger(ExecutionStrategy.class);
 
     protected final ValuesResolver valuesResolver = new ValuesResolver();
     protected final FieldCollector fieldCollector = new FieldCollector();
 
-    public abstract ExecutionResult execute(ExecutionContext executionContext, GraphQLObjectType parentType, Object source, Map<String, List<Field>> fields);
+    public abstract ExecutionResult execute(ExecutionContext executionContext, ExecutionParameters parameters) throws NonNullableFieldWasNullException;
 
-    protected ExecutionResult resolveField(ExecutionContext executionContext, GraphQLObjectType parentType, Object source, List<Field> fields) {
+    protected ExecutionResult resolveField(ExecutionContext executionContext, ExecutionParameters parameters, List<Field> fields) {
         Field field = fields.get(0);
-        GraphQLFieldDefinition fieldDef = getFieldDef(executionContext.getGraphQLSchema(), parentType, field);
+        GraphQLObjectType type = parameters.typeInfo().castType(GraphQLObjectType.class);
+        GraphQLFieldDefinition fieldDef = getFieldDef(executionContext.getGraphQLSchema(), type, fields.get(0));
 
         Map<String, Object> argumentValues = valuesResolver.getArgumentValues(fieldDef.getArguments(), fields.get(0).getArguments(), executionContext.getVariables());
         DataFetchingEnvironment environment = new DataFetchingEnvironmentImpl(
-                source,
+                parameters.source(),
                 argumentValues,
                 executionContext.getRoot(),
                 fields,
                 fieldDef.getType(),
-                parentType,
+                type,
                 executionContext.getGraphQLSchema()
         );
 
@@ -78,29 +70,42 @@ public abstract class ExecutionStrategy {
             fetchCtx.onEnd(e);
         }
 
+        TypeInfo fieldType = newTypeInfo()
+                .type(fieldDef.getType())
+                .parentInfo(parameters.typeInfo())
+                .build();
 
-        ExecutionResult result = completeValue(executionContext, fieldDef.getType(), fields, resolvedValue, calculation);
+
+        ExecutionParameters newParameters = ExecutionParameters.newParameters()
+                .typeInfo(fieldType)
+                .fields(parameters.fields())
+                .source(resolvedValue).build();
+
+        ExecutionResult result = completeValue(executionContext, newParameters, fields, calculation);
 
         fieldCtx.onEnd(result);
         return result;
     }
-    protected ExecutionResult completeValue(ExecutionContext executionContext, GraphQLType fieldType, List<Field> fields, Object result) {
-        return completeValue(executionContext, fieldType, fields, result, null);
+
+    protected ExecutionResult completeValue(ExecutionContext executionContext, ExecutionParameters parameters, List<Field> fields) {
+        return completeValue(executionContext, parameters, fields, null);
     }
 
-    protected ExecutionResult completeValue(ExecutionContext executionContext, GraphQLType fieldType, List<Field> fields, Object result, Object calculation) {
-        if (fieldType instanceof GraphQLNonNull) {
-            GraphQLNonNull graphQLNonNull = (GraphQLNonNull) fieldType;
-            ExecutionResult completed = completeValue(executionContext, graphQLNonNull.getWrappedType(), fields, result);
-            if (completed == null) {
-                throw new GraphQLException("Cannot return null for non-nullable type: " + fields);
-            }
-            return completed;
+    protected ExecutionResult completeValue(ExecutionContext executionContext, ExecutionParameters parameters, List<Field> fields, Object calculation) {
+        TypeInfo typeInfo = parameters.typeInfo();
+        Object result = parameters.source();
+        GraphQLType fieldType = parameters.typeInfo().type();
 
-        } else if (result == null) {
+        if (result == null) {
+            if (typeInfo.typeIsNonNull()) {
+                // see http://facebook.github.io/graphql/#sec-Errors-and-Non-Nullability
+                NonNullableFieldWasNullException nonNullException = new NonNullableFieldWasNullException(typeInfo);
+                executionContext.addError(nonNullException);
+                throw nonNullException;
+            }
             return null;
         } else if (fieldType instanceof GraphQLList) {
-            return completeValueForList(executionContext, (GraphQLList) fieldType, fields, result);
+            return completeValueForList(executionContext, parameters, fields, toIterable(result));
         } else if (fieldType instanceof GraphQLScalarType) {
             return completeValueForScalar((GraphQLScalarType) fieldType, result, calculation);
         } else if (fieldType instanceof GraphQLEnumType) {
@@ -124,18 +129,22 @@ public abstract class ExecutionStrategy {
             fieldCollector.collectFields(executionContext, resolvedType, field.getSelectionSet(), visitedFragments, subFields);
         }
 
+        ExecutionParameters newParameters = ExecutionParameters.newParameters()
+                .typeInfo(typeInfo.asType(resolvedType))
+                .fields(subFields)
+                .source(result).build();
+
         // Calling this from the executionContext to ensure we shift back from mutation strategy to the query strategy.
 
-        return executionContext.getQueryStrategy().execute(executionContext, resolvedType, result, subFields);
+        return executionContext.getQueryStrategy().execute(executionContext, newParameters);
     }
 
-    private ExecutionResult completeValueForList(ExecutionContext executionContext, GraphQLList fieldType, List<Field> fields, Object result) {
+    private Iterable<Object> toIterable(Object result) {
         if (result.getClass().isArray()) {
             result = Arrays.asList((Object[]) result);
         }
-
         //noinspection unchecked
-        return completeValueForList(executionContext, fieldType, fields, (Iterable<Object>) result);
+        return (Iterable<Object>) result;
     }
 
     protected GraphQLObjectType resolveType(GraphQLInterfaceType graphQLInterfaceType, Object value) {
@@ -153,7 +162,6 @@ public abstract class ExecutionStrategy {
         }
         return result;
     }
-
 
     protected ExecutionResult completeValueForEnum(GraphQLEnumType enumType, Object result, Object calculation) {
         if(calculation != null){
@@ -179,10 +187,18 @@ public abstract class ExecutionStrategy {
         return new ExecutionResultImpl(serialized, null);
     }
 
-    protected ExecutionResult completeValueForList(ExecutionContext executionContext, GraphQLList fieldType, List<Field> fields, Iterable<Object> result) {
+    protected ExecutionResult completeValueForList(ExecutionContext executionContext, ExecutionParameters parameters, List<Field> fields, Iterable<Object> result) {
         List<Object> completedResults = new ArrayList<>();
+        TypeInfo typeInfo = parameters.typeInfo();
+        GraphQLList fieldType = typeInfo.castType(GraphQLList.class);
         for (Object item : result) {
-            ExecutionResult completedValue = completeValue(executionContext, fieldType.getWrappedType(), fields, item);
+
+            ExecutionParameters newParameters = ExecutionParameters.newParameters()
+                    .typeInfo(typeInfo.asType(fieldType.getWrappedType()))
+                    .fields(parameters.fields())
+                    .source(item).build();
+
+            ExecutionResult completedValue = completeValue(executionContext, newParameters, fields);
             completedResults.add(completedValue != null ? completedValue.getData() : null);
         }
         return new ExecutionResultImpl(completedResults, null);
