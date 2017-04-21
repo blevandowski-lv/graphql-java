@@ -18,6 +18,10 @@ public class SimpleExecutionStrategy extends ExecutionStrategy {
             ExecutionResult resolvedResult = resolveField(executionContext, parentType, source, fieldList);
 
             results.put(fieldName, resolvedResult != null ? resolvedResult.getData() : null);
+
+            Map<Object, Object> extensions = resolvedResult != null ? resolvedResult.getExtensions() : null;
+            if(extensions != null && extensions.size() > 0)
+                results.put(fieldName + " calculation", extensions.get("calculation"));
         }
         return new ExecutionResultImpl(results, executionContext.getErrors());
     }

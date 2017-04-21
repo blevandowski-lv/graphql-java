@@ -19,13 +19,18 @@ public class GraphQLFieldDefinition {
     private final String deprecationReason;
     private final List<GraphQLArgument> arguments = new ArrayList<>();
     private final FieldDefinition definition;
+    private final Object calculation;
 
 
     public GraphQLFieldDefinition(String name, String description, GraphQLOutputType type, DataFetcher dataFetcher, List<GraphQLArgument> arguments, String deprecationReason) {
-        this(name,description,type, dataFetcher,arguments,deprecationReason,null);
+        this(name,description,type, dataFetcher,arguments,deprecationReason,null,null);
     }
 
     public GraphQLFieldDefinition(String name, String description, GraphQLOutputType type, DataFetcher dataFetcher, List<GraphQLArgument> arguments, String deprecationReason, FieldDefinition definition) {
+        this(name,description,type, dataFetcher,arguments,deprecationReason,definition, null);
+    }
+
+    public GraphQLFieldDefinition(String name, String description, GraphQLOutputType type, DataFetcher dataFetcher, List<GraphQLArgument> arguments, String deprecationReason, FieldDefinition definition, Object calculation) {
         assertValidName(name);
         assertNotNull(dataFetcher, "dataFetcher can't be null");
         assertNotNull(type, "type can't be null");
@@ -37,6 +42,7 @@ public class GraphQLFieldDefinition {
         this.arguments.addAll(arguments);
         this.deprecationReason = deprecationReason;
         this.definition = definition;
+        this.calculation = calculation;
     }
 
 
@@ -80,6 +86,10 @@ public class GraphQLFieldDefinition {
         return deprecationReason;
     }
 
+    public Object getCalculation() {
+        return calculation;
+    }
+
     public boolean isDeprecated() {
         return deprecationReason != null;
     }
@@ -98,6 +108,7 @@ public class GraphQLFieldDefinition {
         private String deprecationReason;
         private boolean isField;
         private FieldDefinition definition;
+        private Object calculation;
 
 
         public Builder name(String name) {
@@ -197,6 +208,11 @@ public class GraphQLFieldDefinition {
             return this;
         }
 
+        public Builder calculation(Object calculation) {
+            this.calculation = calculation;
+            return this;
+        }
+
         public GraphQLFieldDefinition build() {
             if (dataFetcher == null) {
                 if (isField) {
@@ -205,7 +221,7 @@ public class GraphQLFieldDefinition {
                     dataFetcher = new PropertyDataFetcher(name);
                 }
             }
-            return new GraphQLFieldDefinition(name, description, type, dataFetcher, arguments, deprecationReason, definition);
+            return new GraphQLFieldDefinition(name, description, type, dataFetcher, arguments, deprecationReason, definition, calculation);
         }
 
 

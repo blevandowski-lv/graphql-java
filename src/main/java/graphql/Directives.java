@@ -30,5 +30,10 @@ public class Directives {
             .validLocations(FRAGMENT_SPREAD, INLINE_FRAGMENT, FIELD)
             .build();
 
+    public static final GraphQLDirective CalculationDirective = GraphQLDirective.newDirective()
+            .name("calculation")
+            .description("Directs the executor to show the calculation for the field.")
+            .validLocations(FRAGMENT_SPREAD, INLINE_FRAGMENT, FIELD)
+            .build();
 
 }

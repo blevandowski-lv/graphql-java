@@ -8,6 +8,7 @@ import graphql.execution.instrumentation.Instrumentation;
 import graphql.execution.instrumentation.InstrumentationContext;
 import graphql.execution.instrumentation.parameters.FieldFetchParameters;
 import graphql.execution.instrumentation.parameters.FieldParameters;
+import graphql.language.Directive;
 import graphql.language.Field;
 import graphql.schema.DataFetchingEnvironment;
 import graphql.schema.DataFetchingEnvironmentImpl;
@@ -24,12 +25,9 @@ import graphql.schema.GraphQLUnionType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
+import static graphql.Directives.CalculationDirective;
 import static graphql.introspection.Introspection.SchemaMetaFieldDef;
 import static graphql.introspection.Introspection.TypeMetaFieldDef;
 import static graphql.introspection.Introspection.TypeNameMetaFieldDef;
@@ -43,7 +41,8 @@ public abstract class ExecutionStrategy {
     public abstract ExecutionResult execute(ExecutionContext executionContext, GraphQLObjectType parentType, Object source, Map<String, List<Field>> fields);
 
     protected ExecutionResult resolveField(ExecutionContext executionContext, GraphQLObjectType parentType, Object source, List<Field> fields) {
-        GraphQLFieldDefinition fieldDef = getFieldDef(executionContext.getGraphQLSchema(), parentType, fields.get(0));
+        Field field = fields.get(0);
+        GraphQLFieldDefinition fieldDef = getFieldDef(executionContext.getGraphQLSchema(), parentType, field);
 
         Map<String, Object> argumentValues = valuesResolver.getArgumentValues(fieldDef.getArguments(), fields.get(0).getArguments(), executionContext.getVariables());
         DataFetchingEnvironment environment = new DataFetchingEnvironmentImpl(
@@ -62,8 +61,14 @@ public abstract class ExecutionStrategy {
 
         InstrumentationContext<Object> fetchCtx = instrumentation.beginFieldFetch(new FieldFetchParameters(executionContext, fieldDef, environment));
         Object resolvedValue = null;
+        Object calculation = null;
         try {
             resolvedValue = fieldDef.getDataFetcher().get(environment);
+
+            for (Directive directive : field.getDirectives()) {
+                if (directive.getName().equals(CalculationDirective.getName()))
+                    calculation = fieldDef.getCalculation();
+            }
 
             fetchCtx.onEnd(resolvedValue);
         } catch (Exception e) {
@@ -73,13 +78,17 @@ public abstract class ExecutionStrategy {
             fetchCtx.onEnd(e);
         }
 
-        ExecutionResult result = completeValue(executionContext, fieldDef.getType(), fields, resolvedValue);
+
+        ExecutionResult result = completeValue(executionContext, fieldDef.getType(), fields, resolvedValue, calculation);
 
         fieldCtx.onEnd(result);
         return result;
     }
-
     protected ExecutionResult completeValue(ExecutionContext executionContext, GraphQLType fieldType, List<Field> fields, Object result) {
+        return completeValue(executionContext, fieldType, fields, result, null);
+    }
+
+    protected ExecutionResult completeValue(ExecutionContext executionContext, GraphQLType fieldType, List<Field> fields, Object result, Object calculation) {
         if (fieldType instanceof GraphQLNonNull) {
             GraphQLNonNull graphQLNonNull = (GraphQLNonNull) fieldType;
             ExecutionResult completed = completeValue(executionContext, graphQLNonNull.getWrappedType(), fields, result);
@@ -93,9 +102,9 @@ public abstract class ExecutionStrategy {
         } else if (fieldType instanceof GraphQLList) {
             return completeValueForList(executionContext, (GraphQLList) fieldType, fields, result);
         } else if (fieldType instanceof GraphQLScalarType) {
-            return completeValueForScalar((GraphQLScalarType) fieldType, result);
+            return completeValueForScalar((GraphQLScalarType) fieldType, result, calculation);
         } else if (fieldType instanceof GraphQLEnumType) {
-            return completeValueForEnum((GraphQLEnumType) fieldType, result);
+            return completeValueForEnum((GraphQLEnumType) fieldType, result, calculation);
         }
 
 
@@ -146,15 +155,26 @@ public abstract class ExecutionStrategy {
     }
 
 
-    protected ExecutionResult completeValueForEnum(GraphQLEnumType enumType, Object result) {
+    protected ExecutionResult completeValueForEnum(GraphQLEnumType enumType, Object result, Object calculation) {
+        if(calculation != null){
+            Map<Object, Object> calcMap = new HashMap<>();
+            calcMap.put("calculation", calculation);
+            return new ExecutionResultImpl(enumType.getCoercing().serialize(result), null, calcMap);
+        }
+
         return new ExecutionResultImpl(enumType.getCoercing().serialize(result), null);
     }
 
-    protected ExecutionResult completeValueForScalar(GraphQLScalarType scalarType, Object result) {
+    protected ExecutionResult completeValueForScalar(GraphQLScalarType scalarType, Object result, Object calculation) {
         Object serialized = scalarType.getCoercing().serialize(result);
         //6.6.1 http://facebook.github.io/graphql/#sec-Field-entries
         if (serialized instanceof Double && ((Double) serialized).isNaN()) {
             serialized = null;
+        }
+        if(calculation != null){
+            Map<Object, Object> calcMap = new HashMap<>();
+            calcMap.put("calculation", calculation);
+            return new ExecutionResultImpl(serialized, null, calcMap);
         }
         return new ExecutionResultImpl(serialized, null);
     }

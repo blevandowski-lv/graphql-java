@@ -59,7 +59,7 @@ public class GraphQLSchema {
     }
 
     public List<GraphQLDirective> getDirectives() {
-        return Arrays.asList(Directives.IncludeDirective, Directives.SkipDirective);
+        return Arrays.asList(Directives.IncludeDirective, Directives.SkipDirective, Directives.CalculationDirective);
     }
 
     public GraphQLDirective getDirective(String name) {
