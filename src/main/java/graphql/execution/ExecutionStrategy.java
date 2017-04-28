@@ -135,6 +135,15 @@ public abstract class ExecutionStrategy {
                 .source(result).build();
 
         // Calling this from the executionContext to ensure we shift back from mutation strategy to the query strategy.
+        if(calculation != null) {
+            Map<Object, Object> calcMap = new HashMap<>();
+            calcMap.put("calculation", calculation);
+            List<Object> completedResults = new ArrayList<>();
+            ExecutionResult completedValue = completeValue(executionContext, newParameters, fields);
+            completedResults.add(completedValue != null ? completedValue.getData() : null);
+
+            return new ExecutionResultImpl(completedResults, null, calcMap);
+        }
 
         return executionContext.getQueryStrategy().execute(executionContext, newParameters);
     }
