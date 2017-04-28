@@ -1,6 +1,5 @@
 package graphql.execution.batched;
 
-import graphql.ExceptionWhileDataFetching;
 import graphql.ExecutionResult;
 import graphql.ExecutionResultImpl;
 import graphql.GraphQLException;
@@ -256,23 +255,19 @@ public class BatchedExecutionStrategy extends ExecutionStrategy {
         DataFetchingEnvironment environment = new DataFetchingEnvironmentImpl(
                 sources,
                 argumentValues,
-                executionContext.getRoot(),
                 fields,
                 fieldDef.getType(),
                 parentType,
-                executionContext.getGraphQLSchema()
+                executionContext
         );
 
         List<Object> values;
         try {
             values = (List<Object>) getDataFetcher(fieldDef).get(environment);
         } catch (Exception e) {
-            values = new ArrayList<>();
-            for (int i = 0; i < nodeData.size(); i++) {
-                values.add(null);
-            }
+            values = new ArrayList<>(nodeData.size());
             log.warn("Exception while fetching data", e);
-            executionContext.addError(new ExceptionWhileDataFetching(e));
+            handleDataFetchingException(executionContext, fieldDef, argumentValues, e);
         }
         assert nodeData.size() == values.size();
 

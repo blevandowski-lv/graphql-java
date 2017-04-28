@@ -31,6 +31,25 @@ public abstract class ExecutionStrategy {
 
     public abstract ExecutionResult execute(ExecutionContext executionContext, ExecutionParameters parameters) throws NonNullableFieldWasNullException;
 
+    /**
+     * Handle exceptions which occur during data fetching. By default, add all exceptions to the execution context's
+     * error's. Subclasses may specify custom handling, e.g. of different behavior with different exception types (e.g.
+     * re-throwing certain exceptions).
+     *
+     * @param executionContext the execution context in play
+     * @param fieldDef         the field definition
+     * @param argumentValues   the map of arguments
+     * @param e                the exception that occurred
+     */
+    protected void handleDataFetchingException(
+            ExecutionContext executionContext,
+            GraphQLFieldDefinition fieldDef,
+            Map<String, Object> argumentValues,
+            Exception e) {
+        executionContext.addError(new ExceptionWhileDataFetching(e));
+    }
+
+
     protected ExecutionResult resolveField(ExecutionContext executionContext, ExecutionParameters parameters, List<Field> fields) {
         Field field = fields.get(0);
         GraphQLObjectType type = parameters.typeInfo().castType(GraphQLObjectType.class);
@@ -40,11 +59,10 @@ public abstract class ExecutionStrategy {
         DataFetchingEnvironment environment = new DataFetchingEnvironmentImpl(
                 parameters.source(),
                 argumentValues,
-                executionContext.getRoot(),
                 fields,
                 fieldDef.getType(),
                 type,
-                executionContext.getGraphQLSchema()
+                executionContext
         );
 
         Instrumentation instrumentation = executionContext.getInstrumentation();
@@ -65,8 +83,7 @@ public abstract class ExecutionStrategy {
             fetchCtx.onEnd(resolvedValue);
         } catch (Exception e) {
             log.warn("Exception while fetching data", e);
-            executionContext.addError(new ExceptionWhileDataFetching(e));
-
+            handleDataFetchingException(executionContext, fieldDef, argumentValues, e);
             fetchCtx.onEnd(e);
         }
 
