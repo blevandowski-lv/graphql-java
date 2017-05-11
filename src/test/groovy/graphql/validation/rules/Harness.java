@@ -1,8 +1,17 @@
 package graphql.validation.rules;
 
-import graphql.schema.*;
+import graphql.schema.GraphQLEnumType;
+import graphql.schema.GraphQLInterfaceType;
+import graphql.schema.GraphQLList;
+import graphql.schema.GraphQLObjectType;
+import graphql.schema.GraphQLSchema;
+import graphql.schema.GraphQLTypeReference;
+import graphql.schema.GraphQLUnionType;
+import graphql.schema.TypeResolver;
 
-import static graphql.Scalars.*;
+import static graphql.Scalars.GraphQLBoolean;
+import static graphql.Scalars.GraphQLInt;
+import static graphql.Scalars.GraphQLString;
 import static graphql.schema.GraphQLArgument.newArgument;
 import static graphql.schema.GraphQLEnumType.newEnum;
 import static graphql.schema.GraphQLFieldDefinition.newFieldDefinition;
@@ -14,7 +23,7 @@ import static graphql.schema.GraphQLUnionType.newUnionType;
 
 public class Harness {
 
-    private static TypeResolver dummyTypeResolve = object -> null;
+    private static TypeResolver dummyTypeResolve = env -> null;
 
 
     public static GraphQLInterfaceType Being = newInterface()
@@ -112,7 +121,7 @@ public class Harness {
     public static GraphQLUnionType CatOrDog = newUnionType()
             .name("CatOrDog")
             .possibleTypes(Dog, Cat)
-            .typeResolver(object -> null)
+            .typeResolver(env -> null)
             .build();
 
     public static GraphQLInterfaceType Intelligent = newInterface()
@@ -127,10 +136,7 @@ public class Harness {
             .name("Human")
             .field(newFieldDefinition()
                     .name("name")
-                    .type(GraphQLString)
-                    .argument(newArgument()
-                            .name("surname")
-                            .type(GraphQLBoolean)))
+                    .type(GraphQLString))
             .field(newFieldDefinition()
                     .name("pets")
                     .type(new GraphQLList(Pet)))
@@ -145,6 +151,9 @@ public class Harness {
 
     public static GraphQLObjectType Alien = newObject()
             .name("Alien")
+            .field(newFieldDefinition()
+                    .name("name")
+                    .type(GraphQLString))
             .field(newFieldDefinition()
                     .name("numEyes")
                     .type(GraphQLInt))
@@ -165,29 +174,6 @@ public class Harness {
             .possibleTypes(Alien, Human)
             .typeResolver(dummyTypeResolve)
             .build();
-//    public static GraphQLInputObjectType ComplexInput = newInputObject()
-//            .field(newInputObjectField()
-//                    .name("requiredField")
-//                    .type(new GraphQLNonNull(GraphQLBoolean))
-//                    .build())
-//            .field(newInputObjectField()
-//                    .name("intField")
-//                    .type(GraphQLInt)
-//                    .build())
-//            .field(newInputObjectField()
-//                    .name("stringField")
-//                    .type(GraphQLString)
-//                    .build())
-//            .field(newInputObjectField()
-//                    .name("booleanField")
-//                    .type(GraphQLBoolean)
-//                    .build())
-//            .field(newInputObjectField()
-//                    .name("stringListField")
-//                    .type(new GraphQLList(GraphQLString))
-//                    .build())
-//            .build();
-
 
     public static GraphQLObjectType QueryRoot = newObject()
             .name("QueryRoot")

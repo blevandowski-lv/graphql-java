@@ -1,22 +1,11 @@
 package graphql;
 
+import graphql.schema.*;
+
 import java.util.Arrays;
 import java.util.HashSet;
 
-import graphql.schema.GraphQLArgument;
-import graphql.schema.GraphQLFieldDefinition;
-import graphql.schema.GraphQLInputObjectType;
-import graphql.schema.GraphQLInterfaceType;
-import graphql.schema.GraphQLObjectType;
-import graphql.schema.GraphQLSchema;
-import graphql.schema.GraphQLType;
-import graphql.schema.GraphQLTypeReference;
-import graphql.schema.GraphQLUnionType;
-import graphql.schema.TypeResolverProxy;
-
-import static graphql.GarfieldSchema.CatType;
-import static graphql.GarfieldSchema.DogType;
-import static graphql.GarfieldSchema.NamedType;
+import static graphql.GarfieldSchema.*;
 import static graphql.Scalars.GraphQLBoolean;
 import static graphql.Scalars.GraphQLString;
 import static graphql.schema.GraphQLFieldDefinition.newFieldDefinition;
@@ -29,8 +18,8 @@ public class TypeReferenceSchema {
 
     public static GraphQLUnionType PetType = newUnionType()
             .name("Pet")
-            .possibleType(GraphQLObjectType.reference(CatType.getName()))
-            .possibleType(GraphQLObjectType.reference(DogType.getName()))
+            .possibleType(new GraphQLTypeReference(CatType.getName()))
+            .possibleType(new GraphQLTypeReference(DogType.getName()))
             .typeResolver(new TypeResolverProxy())
             .build();
     
@@ -49,7 +38,7 @@ public class TypeReferenceSchema {
             .field(newFieldDefinition()
                     .name("pet")
                     .type(new GraphQLTypeReference(PetType.getName())))
-            .withInterface(GraphQLInterfaceType.reference(NamedType.getName()))
+            .withInterface(new GraphQLTypeReference(NamedType.getName()))
             .build();
 
     public static GraphQLFieldDefinition exists = newFieldDefinition()
@@ -74,6 +63,6 @@ public class TypeReferenceSchema {
             .field(find)
             .build();
 
-    public static GraphQLSchema SchemaWithReferences = new GraphQLSchema(PersonService, null, 
-            new HashSet<GraphQLType>(Arrays.asList(PersonType, PersonInputType, PetType, CatType, DogType, NamedType)));
+    public static GraphQLSchema SchemaWithReferences = new GraphQLSchema(PersonService, null,
+            new HashSet<>(Arrays.asList(PersonType, PersonInputType, PetType, CatType, DogType, NamedType)));
 }

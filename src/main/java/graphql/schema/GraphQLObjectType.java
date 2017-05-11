@@ -1,50 +1,54 @@
 package graphql.schema;
 
 import graphql.AssertException;
+import graphql.Internal;
+import graphql.PublicApi;
 import graphql.language.ObjectTypeDefinition;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.UnaryOperator;
+import java.util.stream.Collectors;
 
 import static graphql.Assert.assertNotNull;
 import static graphql.Assert.assertValidName;
 
+
+@PublicApi
 public class GraphQLObjectType implements GraphQLType, GraphQLOutputType, GraphQLFieldsContainer, GraphQLCompositeType, GraphQLUnmodifiedType, GraphQLNullableType {
+
 
     private final String name;
     private final String description;
     private final Map<String, GraphQLFieldDefinition> fieldDefinitionsByName = new LinkedHashMap<>();
-    private final List<GraphQLInterfaceType> interfaces = new ArrayList<>();
+    private List<GraphQLOutputType> interfaces = new ArrayList<>();
     private final ObjectTypeDefinition definition;
 
+    @Internal
     public GraphQLObjectType(String name, String description, List<GraphQLFieldDefinition> fieldDefinitions,
-                             List<GraphQLInterfaceType> interfaces) {
+                             List<GraphQLOutputType> interfaces) {
         this(name, description, fieldDefinitions, interfaces, null);
     }
 
+    @Internal
     public GraphQLObjectType(String name, String description, List<GraphQLFieldDefinition> fieldDefinitions,
-                             List<GraphQLInterfaceType> interfaces, ObjectTypeDefinition definition) {
+                             List<GraphQLOutputType> interfaces, ObjectTypeDefinition definition) {
         assertValidName(name);
         assertNotNull(fieldDefinitions, "fieldDefinitions can't be null");
         assertNotNull(interfaces, "interfaces can't be null");
-        assertNotNull(interfaces, "unresolvedInterfaces can't be null");
         this.name = name;
         this.description = description;
-        this.interfaces.addAll(interfaces);
+        this.interfaces = interfaces;
         this.definition = definition;
         buildDefinitionMap(fieldDefinitions);
     }
 
     void replaceTypeReferences(Map<String, GraphQLType> typeMap) {
-        for (int i = 0; i < interfaces.size(); i++) {
-            GraphQLInterfaceType inter = interfaces.get(i);
-            if (inter instanceof TypeReference) {
-                this.interfaces.set(i, (GraphQLInterfaceType) new SchemaUtil().resolveTypeReference(inter, typeMap));
-            }
-        }
+        this.interfaces = this.interfaces.stream()
+                .map(type -> (GraphQLOutputType) new SchemaUtil().resolveTypeReference(type, typeMap))
+                .collect(Collectors.toList());
     }
 
     private void buildDefinitionMap(List<GraphQLFieldDefinition> fieldDefinitions) {
@@ -66,7 +70,12 @@ public class GraphQLObjectType implements GraphQLType, GraphQLOutputType, GraphQ
     }
 
 
-    public List<GraphQLInterfaceType> getInterfaces() {
+    /**
+     * @return This returns GraphQLInterface or GraphQLTypeReference instances, if the type
+     * references are not resolved yet. After they are resolved it contains only GraphQLInterface.
+     * Reference resolving happens when a full schema is built.
+     */
+    public List<GraphQLOutputType> getInterfaces() {
         return new ArrayList<>(interfaces);
     }
 
@@ -97,15 +106,12 @@ public class GraphQLObjectType implements GraphQLType, GraphQLOutputType, GraphQ
         return new Builder();
     }
 
-    public static Reference reference(String name) {
-        return new Reference(name);
-    }
-
+    @PublicApi
     public static class Builder {
         private String name;
         private String description;
         private List<GraphQLFieldDefinition> fieldDefinitions = new ArrayList<>();
-        private List<GraphQLInterfaceType> interfaces = new ArrayList<>();
+        private List<GraphQLOutputType> interfaces = new ArrayList<>();
         private ObjectTypeDefinition definition;
 
         public Builder name(String name) {
@@ -141,7 +147,7 @@ public class GraphQLObjectType implements GraphQLType, GraphQLOutputType, GraphQ
          * @param builderFunction a supplier for the builder impl
          * @return this
          */
-        public Builder field(BuilderFunction<GraphQLFieldDefinition.Builder> builderFunction) {
+        public Builder field(UnaryOperator<GraphQLFieldDefinition.Builder> builderFunction) {
             assertNotNull(builderFunction, "builderFunction can't be null");
             GraphQLFieldDefinition.Builder builder = GraphQLFieldDefinition.newFieldDefinition();
             builder = builderFunction.apply(builder);
@@ -172,9 +178,22 @@ public class GraphQLObjectType implements GraphQLType, GraphQLOutputType, GraphQ
             return this;
         }
 
+        public Builder withInterface(GraphQLTypeReference reference) {
+            assertNotNull(reference, "reference can't be null");
+            this.interfaces.add(reference);
+            return this;
+        }
+
         public Builder withInterfaces(GraphQLInterfaceType... interfaceType) {
             for (GraphQLInterfaceType type : interfaceType) {
                 withInterface(type);
+            }
+            return this;
+        }
+
+        public Builder withInterfaces(GraphQLTypeReference... references) {
+            for (GraphQLTypeReference reference : references) {
+                withInterface(reference);
             }
             return this;
         }
@@ -185,9 +204,4 @@ public class GraphQLObjectType implements GraphQLType, GraphQLOutputType, GraphQ
 
     }
 
-    private static class Reference extends GraphQLObjectType implements TypeReference {
-        private Reference(String name) {
-            super(name, "", Collections.emptyList(), Collections.emptyList(), null);
-        }
-    }
 }
