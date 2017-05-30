@@ -1,17 +1,50 @@
 package graphql.validation;
 
 
+import graphql.Internal;
 import graphql.ShouldNotHappenException;
 import graphql.execution.TypeFromAST;
-import graphql.language.*;
-import graphql.schema.*;
+import graphql.language.Argument;
+import graphql.language.ArrayValue;
+import graphql.language.Directive;
+import graphql.language.Field;
+import graphql.language.FragmentDefinition;
+import graphql.language.InlineFragment;
+import graphql.language.Node;
+import graphql.language.ObjectField;
+import graphql.language.OperationDefinition;
+import graphql.language.SelectionSet;
+import graphql.language.TypeName;
+import graphql.language.VariableDefinition;
+import graphql.schema.GraphQLArgument;
+import graphql.schema.GraphQLCompositeType;
+import graphql.schema.GraphQLDirective;
+import graphql.schema.GraphQLFieldDefinition;
+import graphql.schema.GraphQLFieldsContainer;
+import graphql.schema.GraphQLInputObjectField;
+import graphql.schema.GraphQLInputObjectType;
+import graphql.schema.GraphQLInputType;
+import graphql.schema.GraphQLInterfaceType;
+import graphql.schema.GraphQLList;
+import graphql.schema.GraphQLNonNull;
+import graphql.schema.GraphQLNullableType;
+import graphql.schema.GraphQLObjectType;
+import graphql.schema.GraphQLOutputType;
+import graphql.schema.GraphQLSchema;
+import graphql.schema.GraphQLType;
+import graphql.schema.GraphQLUnionType;
+import graphql.schema.GraphQLUnmodifiedType;
+import graphql.schema.SchemaUtil;
 
 import java.util.ArrayList;
 import java.util.List;
 
-import static graphql.introspection.Introspection.*;
+import static graphql.introspection.Introspection.SchemaMetaFieldDef;
+import static graphql.introspection.Introspection.TypeMetaFieldDef;
+import static graphql.introspection.Introspection.TypeNameMetaFieldDef;
 
-public class TraversalContext implements QueryLanguageVisitor {
+@Internal
+public class TraversalContext implements DocumentVisitor {
     GraphQLSchema schema;
     List<GraphQLOutputType> outputTypeStack = new ArrayList<>();
     List<GraphQLCompositeType> parentTypeStack = new ArrayList<>();
@@ -69,7 +102,7 @@ public class TraversalContext implements QueryLanguageVisitor {
             fieldDefinition = getFieldDef(schema, parentType, field);
         }
         addFieldDef(fieldDefinition);
-        addType(fieldDefinition != null ? fieldDefinition.getType() : null);
+        addOutputType(fieldDefinition != null ? fieldDefinition.getType() : null);
     }
 
     private void enterImpl(Directive directive) {
@@ -78,11 +111,11 @@ public class TraversalContext implements QueryLanguageVisitor {
 
     private void enterImpl(OperationDefinition operationDefinition) {
         if (operationDefinition.getOperation() == OperationDefinition.Operation.MUTATION) {
-            addType(schema.getMutationType());
+            addOutputType(schema.getMutationType());
         } else if (operationDefinition.getOperation() == OperationDefinition.Operation.QUERY) {
-            addType(schema.getQueryType());
+            addOutputType(schema.getQueryType());
         } else if (operationDefinition.getOperation() == OperationDefinition.Operation.SUBSCRIPTION) {
-            addType(schema.getSubscriptionType());
+            addOutputType(schema.getSubscriptionType());
         } else {
             throw new ShouldNotHappenException();
         }
@@ -96,12 +129,12 @@ public class TraversalContext implements QueryLanguageVisitor {
         } else {
             type = (GraphQLOutputType) getParentType();
         }
-        addType(type);
+        addOutputType(type);
     }
 
     private void enterImpl(FragmentDefinition fragmentDefinition) {
         GraphQLType type = schema.getType(fragmentDefinition.getTypeCondition().getName());
-        addType((GraphQLOutputType) type);
+        addOutputType((GraphQLOutputType) type);
     }
 
     private void enterImpl(VariableDefinition variableDefinition) {
@@ -181,11 +214,15 @@ public class TraversalContext implements QueryLanguageVisitor {
         return (GraphQLNullableType) (type instanceof GraphQLNonNull ? ((GraphQLNonNull) type).getWrappedType() : type);
     }
 
+    /**
+     * @return can be null if current node does not have a OutputType associated: for example
+     * if the current field is unknown
+     */
     public GraphQLOutputType getOutputType() {
         return lastElement(outputTypeStack);
     }
 
-    private void addType(GraphQLOutputType type) {
+    private void addOutputType(GraphQLOutputType type) {
         outputTypeStack.add(type);
     }
 
@@ -195,6 +232,9 @@ public class TraversalContext implements QueryLanguageVisitor {
         return list.get(list.size() - 1);
     }
 
+    /**
+     * @return can be null if the parent is not a CompositeType
+     */
     public GraphQLCompositeType getParentType() {
         return lastElement(parentTypeStack);
     }

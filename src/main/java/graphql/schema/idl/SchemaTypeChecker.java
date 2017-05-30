@@ -36,11 +36,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 /**
  * This helps pre check the state of the type system to ensure it can be made into an executable schema.
- *
+ * <p>
  * It looks for missing types and ensure certain invariants are true before a schema can be made.
  */
 public class SchemaTypeChecker {
@@ -63,9 +64,17 @@ public class SchemaTypeChecker {
     }
 
     private void checkSchemaInvariants(List<GraphQLError> errors, TypeDefinitionRegistry typeRegistry) {
+        /*
+            https://github.com/facebook/graphql/pull/90/files#diff-fe406b08746616e2f5f00909488cce66R1000
+
+            GraphQL type system definitions can omit the schema definition when the query
+            and mutation root types are named `Query` and `Mutation`, respectively.
+         */
         // schema
         if (!typeRegistry.schemaDefinition().isPresent()) {
-            errors.add(new SchemaMissingError());
+            if (!typeRegistry.getType("Query").isPresent()) {
+                errors.add(new SchemaMissingError());
+            }
         } else {
             SchemaDefinition schemaDefinition = typeRegistry.schemaDefinition().get();
             List<OperationTypeDefinition> operationTypeDefinitions = schemaDefinition.getOperationTypeDefinitions();
@@ -153,15 +162,25 @@ public class SchemaTypeChecker {
 
     private void checkTypeResolversArePresent(List<GraphQLError> errors, TypeDefinitionRegistry typeRegistry, RuntimeWiring wiring) {
 
-        Consumer<TypeDefinition> checkForResolver = typeDef -> {
-            if (!wiring.getTypeResolvers().containsKey(typeDef.getName())) {
-                errors.add(new MissingTypeResolverError(typeDef));
-            }
-        };
+        Predicate<InterfaceTypeDefinition> noDynamicResolverForInterface = interaceTypeDef -> !wiring.getWiringFactory().providesTypeResolver(typeRegistry, interaceTypeDef);
+        Predicate<UnionTypeDefinition> noDynamicResolverForUnion = unionTypeDef -> !wiring.getWiringFactory().providesTypeResolver(typeRegistry, unionTypeDef);
+
+        Predicate<TypeDefinition> noTypeResolver = typeDefinition -> !wiring.getTypeResolvers().containsKey(typeDefinition.getName());
+        Consumer<TypeDefinition> addError = typeDefinition -> errors.add(new MissingTypeResolverError(typeDefinition));
 
         typeRegistry.types().values().stream()
-                .filter(typeDef -> typeDef instanceof InterfaceTypeDefinition || typeDef instanceof UnionTypeDefinition)
-                .forEach(checkForResolver);
+                .filter(typeDef -> typeDef instanceof InterfaceTypeDefinition)
+                .map(InterfaceTypeDefinition.class::cast)
+                .filter(noDynamicResolverForInterface)
+                .filter(noTypeResolver)
+                .forEach(addError);
+
+        typeRegistry.types().values().stream()
+                .filter(typeDef -> typeDef instanceof UnionTypeDefinition)
+                .map(UnionTypeDefinition.class::cast)
+                .filter(noDynamicResolverForUnion)
+                .filter(noTypeResolver)
+                .forEach(addError);
 
     }
 

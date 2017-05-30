@@ -13,6 +13,7 @@ import graphql.language.InputValueDefinition;
 import graphql.language.IntValue;
 import graphql.language.InterfaceTypeDefinition;
 import graphql.language.Node;
+import graphql.language.NullValue;
 import graphql.language.ObjectTypeDefinition;
 import graphql.language.ObjectValue;
 import graphql.language.OperationTypeDefinition;
@@ -22,6 +23,7 @@ import graphql.language.StringValue;
 import graphql.language.Type;
 import graphql.language.TypeDefinition;
 import graphql.language.TypeExtensionDefinition;
+import graphql.language.TypeName;
 import graphql.language.UnionTypeDefinition;
 import graphql.language.Value;
 import graphql.schema.DataFetcher;
@@ -41,8 +43,11 @@ import graphql.schema.GraphQLUnionType;
 import graphql.schema.PropertyDataFetcher;
 import graphql.schema.TypeResolver;
 import graphql.schema.TypeResolverProxy;
+import graphql.schema.idl.errors.NotAnInputTypeError;
+import graphql.schema.idl.errors.NotAnOutputTypeError;
 import graphql.schema.idl.errors.SchemaProblem;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -50,9 +55,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Stack;
+import java.util.stream.Collectors;
+
+import static graphql.Assert.assertNotNull;
 
 /**
- * This can generate a working runtime schema from a compiled type registry and runtime wiring
+ * This can generate a working runtime schema from a type registry and runtime wiring
  */
 public class SchemaGenerator {
 
@@ -71,6 +79,10 @@ public class SchemaGenerator {
         BuildContext(TypeDefinitionRegistry typeRegistry, RuntimeWiring wiring) {
             this.typeRegistry = typeRegistry;
             this.wiring = wiring;
+        }
+
+        public TypeDefinitionRegistry getTypeRegistry() {
+            return typeRegistry;
         }
 
         @SuppressWarnings("OptionalGetWithoutIsPresent")
@@ -117,11 +129,6 @@ public class SchemaGenerator {
         RuntimeWiring getWiring() {
             return wiring;
         }
-
-        @SuppressWarnings("OptionalGetWithoutIsPresent")
-        public SchemaDefinition getSchemaDefinition() {
-            return typeRegistry.schemaDefinition().get();
-        }
     }
 
     private final SchemaTypeChecker typeChecker = new SchemaTypeChecker();
@@ -132,7 +139,7 @@ public class SchemaGenerator {
     /**
      * This will take a {@link TypeDefinitionRegistry} and a {@link RuntimeWiring} and put them together to create a executable schema
      *
-     * @param typeRegistry this can be obtained via {@link SchemaCompiler#compile(String)}
+     * @param typeRegistry this can be obtained via {@link SchemaParser#parse(String)}
      * @param wiring       this can be built using {@link RuntimeWiring#newRuntimeWiring()}
      *
      * @return an executable schema
@@ -150,26 +157,56 @@ public class SchemaGenerator {
     }
 
     private GraphQLSchema makeExecutableSchemaImpl(BuildContext buildCtx) {
-
-        SchemaDefinition schemaDefinition = buildCtx.getSchemaDefinition();
-        List<OperationTypeDefinition> operationTypes = schemaDefinition.getOperationTypeDefinitions();
-
-        // pre-flight checked via checker
-        @SuppressWarnings("OptionalGetWithoutIsPresent")
-        OperationTypeDefinition queryOp = operationTypes.stream().filter(op -> "query".equals(op.getName())).findFirst().get();
-        Optional<OperationTypeDefinition> mutationOp = operationTypes.stream().filter(op -> "mutation".equals(op.getName())).findFirst();
-
-        GraphQLObjectType query = buildOperation(buildCtx, queryOp);
+        GraphQLObjectType query;
         GraphQLObjectType mutation;
+        GraphQLObjectType subscription;
 
-        GraphQLSchema.Builder schemaBuilder = GraphQLSchema
-                .newSchema()
-                .query(query);
+        GraphQLSchema.Builder schemaBuilder = GraphQLSchema.newSchema();
 
-        if (mutationOp.isPresent()) {
-            mutation = buildOperation(buildCtx, mutationOp.get());
-            schemaBuilder.mutation(mutation);
+        //
+        // Schema can be missing if the type is called 'Query'.  Pre flight checks have checked that!
+        //
+        TypeDefinitionRegistry typeRegistry = buildCtx.getTypeRegistry();
+        if (!typeRegistry.schemaDefinition().isPresent()) {
+            @SuppressWarnings("OptionalGetWithoutIsPresent")
+            TypeDefinition queryTypeDef = typeRegistry.getType("Query").get();
+
+            query = buildOutputType(buildCtx, new TypeName(queryTypeDef.getName()));
+            schemaBuilder.query(query);
+
+            Optional<TypeDefinition> mutationTypeDef = typeRegistry.getType("Mutation");
+            if (mutationTypeDef.isPresent()) {
+                mutation = buildOutputType(buildCtx, new TypeName(mutationTypeDef.get().getName()));
+                schemaBuilder.mutation(mutation);
+            }
+            Optional<TypeDefinition> subscriptionTypeDef = typeRegistry.getType("Subscription");
+            if (subscriptionTypeDef.isPresent()) {
+                subscription = buildOutputType(buildCtx, new TypeName(subscriptionTypeDef.get().getName()));
+                schemaBuilder.subscription(subscription);
+            }
+        } else {
+            SchemaDefinition schemaDefinition = typeRegistry.schemaDefinition().get();
+            List<OperationTypeDefinition> operationTypes = schemaDefinition.getOperationTypeDefinitions();
+
+            // pre-flight checked via checker
+            @SuppressWarnings("OptionalGetWithoutIsPresent")
+            OperationTypeDefinition queryOp = operationTypes.stream().filter(op -> "query".equals(op.getName())).findFirst().get();
+            Optional<OperationTypeDefinition> mutationOp = operationTypes.stream().filter(op -> "mutation".equals(op.getName())).findFirst();
+            Optional<OperationTypeDefinition> subscriptionOp = operationTypes.stream().filter(op -> "subscription".equals(op.getName())).findFirst();
+
+            query = buildOperation(buildCtx, queryOp);
+            schemaBuilder.query(query);
+
+            if (mutationOp.isPresent()) {
+                mutation = buildOperation(buildCtx, mutationOp.get());
+                schemaBuilder.mutation(mutation);
+            }
+            if (subscriptionOp.isPresent()) {
+                subscription = buildOperation(buildCtx, subscriptionOp.get());
+                schemaBuilder.subscription(subscription);
+            }
         }
+
         return schemaBuilder.build();
     }
 
@@ -214,9 +251,12 @@ public class SchemaGenerator {
         } else if (typeDefinition instanceof UnionTypeDefinition) {
             outputType = buildUnionType(buildCtx, (UnionTypeDefinition) typeDefinition);
         } else if (typeDefinition instanceof EnumTypeDefinition) {
-            outputType = buildEnumType((EnumTypeDefinition) typeDefinition);
-        } else {
+            outputType = buildEnumType(buildCtx, (EnumTypeDefinition) typeDefinition);
+        } else if (typeDefinition instanceof ScalarTypeDefinition) {
             outputType = buildScalar(buildCtx, (ScalarTypeDefinition) typeDefinition);
+        } else {
+            // typeDefinition is not a valid output type
+            throw new NotAnOutputTypeError(typeDefinition);
         }
 
         buildCtx.put(outputType);
@@ -244,9 +284,12 @@ public class SchemaGenerator {
         if (typeDefinition instanceof InputObjectTypeDefinition) {
             inputType = buildInputObjectType(buildCtx, (InputObjectTypeDefinition) typeDefinition);
         } else if (typeDefinition instanceof EnumTypeDefinition) {
-            inputType = buildEnumType((EnumTypeDefinition) typeDefinition);
-        } else {
+            inputType = buildEnumType(buildCtx, (EnumTypeDefinition) typeDefinition);
+        } else if (typeDefinition instanceof ScalarTypeDefinition) {
             inputType = buildScalar(buildCtx, (ScalarTypeDefinition) typeDefinition);
+        } else {
+            // typeDefinition is not a valid InputType
+            throw new NotAnInputTypeError(typeDefinition);
         }
 
         buildCtx.put(inputType);
@@ -255,6 +298,7 @@ public class SchemaGenerator {
     }
 
     private GraphQLObjectType buildObjectType(BuildContext buildCtx, ObjectTypeDefinition typeDefinition) {
+
         GraphQLObjectType.Builder builder = GraphQLObjectType.newObject();
         builder.name(typeDefinition.getName());
         builder.description(buildDescription(typeDefinition));
@@ -319,7 +363,7 @@ public class SchemaGenerator {
         builder.name(typeDefinition.getName());
         builder.description(buildDescription(typeDefinition));
 
-        builder.typeResolver(getTypeResolver(buildCtx, typeDefinition.getName()));
+        builder.typeResolver(getTypeResolverForInterface(buildCtx, typeDefinition));
 
         typeDefinition.getFieldDefinitions().forEach(fieldDef ->
                 builder.field(buildField(buildCtx, typeDefinition, fieldDef)));
@@ -330,22 +374,36 @@ public class SchemaGenerator {
         GraphQLUnionType.Builder builder = GraphQLUnionType.newUnionType();
         builder.name(typeDefinition.getName());
         builder.description(buildDescription(typeDefinition));
-        builder.typeResolver(getTypeResolver(buildCtx, typeDefinition.getName()));
+        builder.typeResolver(getTypeResolverForUnion(buildCtx, typeDefinition));
 
         typeDefinition.getMemberTypes().forEach(mt -> {
-            TypeDefinition memberTypeDef = buildCtx.getTypeDefinition(mt);
-            GraphQLObjectType objectType = buildObjectType(buildCtx, (ObjectTypeDefinition) memberTypeDef);
-            builder.possibleType(objectType);
+            GraphQLOutputType outputType = buildOutputType(buildCtx, mt);
+            if (outputType instanceof GraphQLTypeReference) {
+                builder.possibleType((GraphQLTypeReference) outputType);
+            } else {
+                builder.possibleType((GraphQLObjectType) outputType);
+            }
         });
         return builder.build();
     }
 
-    private GraphQLEnumType buildEnumType(EnumTypeDefinition typeDefinition) {
+    private GraphQLEnumType buildEnumType(BuildContext buildCtx, EnumTypeDefinition typeDefinition) {
         GraphQLEnumType.Builder builder = GraphQLEnumType.newEnum();
         builder.name(typeDefinition.getName());
         builder.description(buildDescription(typeDefinition));
 
-        typeDefinition.getEnumValueDefinitions().forEach(evd -> builder.value(evd.getName()));
+        EnumValuesProvider enumValuesProvider = buildCtx.getWiring().getEnumValuesProviders().get(typeDefinition.getName());
+        typeDefinition.getEnumValueDefinitions().forEach(evd -> {
+            String description = buildDescription(evd);
+            Object value;
+            if (enumValuesProvider != null) {
+                value = enumValuesProvider.getValue(evd.getName());
+                assertNotNull(value, String.format("EnumValuesProvider for %s returned null for %s", typeDefinition.getName(), evd.getName()));
+            } else {
+                value = evd.getName();
+            }
+            builder.value(evd.getName(), value, description);
+        });
         return builder.build();
     }
 
@@ -370,14 +428,23 @@ public class SchemaGenerator {
     }
 
     private DataFetcher buildDataFetcher(BuildContext buildCtx, TypeDefinition parentType, FieldDefinition fieldDef) {
-        RuntimeWiring wiring = buildCtx.getWiring();
         String fieldName = fieldDef.getName();
-        DataFetcher dataFetcher = wiring.getDataFetcherForType(parentType.getName()).get(fieldName);
-        if (dataFetcher == null) {
-            //
-            // in the future we could support FieldDateFetcher but we would need a way to indicate that in the schema spec
-            // perhaps by a directive
-            dataFetcher = new PropertyDataFetcher(fieldName);
+        TypeDefinitionRegistry typeRegistry = buildCtx.getTypeRegistry();
+        RuntimeWiring wiring = buildCtx.getWiring();
+        WiringFactory wiringFactory = wiring.getWiringFactory();
+
+        DataFetcher dataFetcher;
+        if (wiringFactory.providesDataFetcher(typeRegistry, fieldDef)) {
+            dataFetcher = wiringFactory.getDataFetcher(typeRegistry, fieldDef);
+            assertNotNull(dataFetcher, "The WiringFactory indicated it provides a data fetcher but then returned null");
+        } else {
+            dataFetcher = wiring.getDataFetcherForType(parentType.getName()).get(fieldName);
+            if (dataFetcher == null) {
+                //
+                // in the future we could support FieldDateFetcher but we would need a way to indicate that in the schema spec
+                // perhaps by a directive
+                dataFetcher = new PropertyDataFetcher(fieldName);
+            }
         }
         return dataFetcher;
     }
@@ -432,6 +499,8 @@ public class SchemaGenerator {
             result = arrayValue.getValues().stream().map(this::buildValue).toArray();
         } else if (value instanceof ObjectValue) {
             result = buildObjectValue((ObjectValue) value);
+        } else if (value instanceof NullValue) {
+            result = null;
         }
         return result;
 
@@ -443,25 +512,61 @@ public class SchemaGenerator {
         return map;
     }
 
-    private TypeResolver getTypeResolver(BuildContext buildCtx, String name) {
-        TypeResolver typeResolver = buildCtx.getWiring().getTypeResolvers().get(name);
-        if (typeResolver == null) {
-            // this really should be checked earlier via a pre-flight check
-            typeResolver = new TypeResolverProxy();
+    private TypeResolver getTypeResolverForUnion(BuildContext buildCtx, UnionTypeDefinition unionType) {
+        TypeDefinitionRegistry typeRegistry = buildCtx.getTypeRegistry();
+        RuntimeWiring wiring = buildCtx.getWiring();
+        WiringFactory wiringFactory = wiring.getWiringFactory();
+
+        TypeResolver typeResolver;
+        if (wiringFactory.providesTypeResolver(typeRegistry, unionType)) {
+            typeResolver = wiringFactory.getTypeResolver(typeRegistry, unionType);
+            assertNotNull(typeResolver, "The WiringFactory indicated it provides a type resolver but then returned null");
+
+        } else {
+            typeResolver = wiring.getTypeResolvers().get(unionType.getName());
+            if (typeResolver == null) {
+                // this really should be checked earlier via a pre-flight check
+                typeResolver = new TypeResolverProxy();
+            }
         }
+
+        return typeResolver;
+    }
+
+    private TypeResolver getTypeResolverForInterface(BuildContext buildCtx, InterfaceTypeDefinition interfaceType) {
+        TypeDefinitionRegistry typeRegistry = buildCtx.getTypeRegistry();
+        RuntimeWiring wiring = buildCtx.getWiring();
+        WiringFactory wiringFactory = wiring.getWiringFactory();
+
+        TypeResolver typeResolver;
+        if (wiringFactory.providesTypeResolver(typeRegistry, interfaceType)) {
+            typeResolver = wiringFactory.getTypeResolver(typeRegistry, interfaceType);
+            assertNotNull(typeResolver, "The WiringFactory indicated it provides a type resolver but then returned null");
+
+        } else {
+            typeResolver = wiring.getTypeResolvers().get(interfaceType.getName());
+            if (typeResolver == null) {
+                // this really should be checked earlier via a pre-flight check
+                typeResolver = new TypeResolverProxy();
+            }
+        }
+
         return typeResolver;
     }
 
 
     private String buildDescription(Node node) {
-        StringBuilder sb = new StringBuilder();
         List<Comment> comments = node.getComments();
-        for (int i = 0; i < comments.size(); i++) {
-            if (i > 0) {
-                sb.append("\n");
+        List<String> lines = new ArrayList<>();
+        for (Comment comment : comments) {
+            String commentLine = comment.getContent();
+            if (commentLine.trim().isEmpty()) {
+                lines.clear();
+            } else {
+                lines.add(commentLine);
             }
-            sb.append(comments.get(i).getContent().trim());
         }
-        return sb.toString();
+        if (lines.size() == 0) return null;
+        return lines.stream().collect(Collectors.joining("\n"));
     }
 }

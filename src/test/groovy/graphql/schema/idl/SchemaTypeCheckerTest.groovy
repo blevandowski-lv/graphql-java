@@ -2,6 +2,10 @@ package graphql.schema.idl
 
 import graphql.GraphQLError
 import graphql.TypeResolutionEnvironment
+import graphql.language.FieldDefinition
+import graphql.language.InterfaceTypeDefinition
+import graphql.language.UnionTypeDefinition
+import graphql.schema.DataFetcher
 import graphql.schema.GraphQLObjectType
 import graphql.schema.TypeResolver
 import graphql.schema.idl.errors.SchemaMissingError
@@ -9,21 +13,64 @@ import spock.lang.Specification
 
 class SchemaTypeCheckerTest extends Specification {
 
-    TypeDefinitionRegistry compile(String spec) {
-        new SchemaCompiler().compile(spec)
+    TypeDefinitionRegistry parse(String spec) {
+        new SchemaParser().parse(spec)
     }
 
-    List<GraphQLError> check(String spec) {
-        def types = compile(spec)
-
-        def resolver = new TypeResolver() {
-            @Override
-            GraphQLObjectType getType(TypeResolutionEnvironment env) {
-                throw new UnsupportedOperationException("Not implemented")
-            }
+    def resolver = new TypeResolver() {
+        @Override
+        GraphQLObjectType getType(TypeResolutionEnvironment env) {
+            throw new UnsupportedOperationException("Not implemented")
         }
+    }
+
+    class NamedWiringFactory implements WiringFactory {
+        List<String> names
+
+        NamedWiringFactory(List<String> names) {
+            this.names = names
+        }
+
+        @Override
+        boolean providesTypeResolver(TypeDefinitionRegistry registry, InterfaceTypeDefinition definition) {
+            return names.contains(definition.getName())
+        }
+
+        @Override
+        boolean providesTypeResolver(TypeDefinitionRegistry registry, UnionTypeDefinition definition) {
+            return names.contains(definition.getName())
+        }
+
+        @Override
+        TypeResolver getTypeResolver(TypeDefinitionRegistry registry, UnionTypeDefinition definition) {
+            resolver
+        }
+
+        @Override
+        TypeResolver getTypeResolver(TypeDefinitionRegistry registry, InterfaceTypeDefinition definition) {
+            resolver
+        }
+
+        @Override
+        boolean providesDataFetcher(TypeDefinitionRegistry registry, FieldDefinition definition) {
+            false
+        }
+
+        @Override
+        DataFetcher getDataFetcher(TypeDefinitionRegistry registry, FieldDefinition definition) {
+            throw new UnsupportedOperationException("Not implemented")
+        }
+    }
+
+
+    List<GraphQLError> check(String spec) {
+        def types = parse(spec)
+
+
+        NamedWiringFactory wiringFactory = new NamedWiringFactory(["InterfaceType"])
+
         def wiring = RuntimeWiring.newRuntimeWiring()
-                .type(TypeRuntimeWiring.newTypeWiring("InterfaceType").typeResolver(resolver))
+                .wiringFactory(wiringFactory)
                 .type(TypeRuntimeWiring.newTypeWiring("InterfaceType1").typeResolver(resolver))
                 .type(TypeRuntimeWiring.newTypeWiring("InterfaceType2").typeResolver(resolver))
                 .build()
@@ -134,7 +181,7 @@ class SchemaTypeCheckerTest extends Specification {
                 id : ID!
             }
             
-            # no schema defined and hence we can proceed
+            # no schema defined and hence we cant proceed
         """
 
         def result = check(spec)
@@ -157,6 +204,43 @@ class SchemaTypeCheckerTest extends Specification {
         expect:
 
         result.get(0).getMessage().contains("The operation type 'MissingType' is not present when resolving type 'query'")
+    }
+
+    def "test missing schema is ok with Query type"() {
+
+        def spec = """ 
+            type Query {
+                id : ID!
+            }
+            
+            # no schema defined but its named ok
+        """
+
+        def result = check(spec)
+
+        expect:
+
+        result.isEmpty()
+    }
+
+    def "test missing schema is not ok with standard named Mutation and Subscription types"() {
+
+        def spec = """ 
+            type Mutation {
+                id : ID!
+            }
+            type Subscription {
+                id : ID!
+            }
+            
+            # no schema defined but its named ok
+        """
+
+        def result = check(spec)
+
+        expect:
+
+        result.get(0) instanceof SchemaMissingError
     }
 
     def "test operation type is not an object"() {

@@ -9,13 +9,13 @@ apply plugin: 'maven'
 apply plugin: 'maven-publish'
 apply plugin: 'antlr'
 apply plugin: 'jacoco'
+apply plugin: 'signing'
 
 sourceCompatibility = 1.8
 targetCompatibility = 1.8
 def releaseVersion = System.properties.RELEASE_VERSION
 version = releaseVersion ? releaseVersion : new SimpleDateFormat('yyyy-MM-dd\'T\'HH-mm-ss').format(new Date())
-group = 'com.graphql-java'
-
+group = 'com.learnvest'
 
 repositories {
     mavenCentral()
@@ -66,9 +66,76 @@ allprojects {
     tasks.withType(Javadoc) {
         exclude('**/antlr/**')
     }
-
-
 }
+
+uploadArchives {
+    repositories {
+        mavenDeployer {
+            repository(url: "http://build.learnvest.net:8081/nexus/content/repositories/snapshots/libs-snapshots-local") {
+                authentication(userName: userName, password: password)
+            }
+            pom.version = "1.0-SNAPSHOT"
+            pom.artifactId = "graphql-java-directives"
+            pom.groupId = "com.learnvest"
+        }
+    }
+}
+
+//<parent>
+//<groupId>com.learnvest</groupId>
+//    <artifactId>blazewater-bay</artifactId>
+//<version>1.0-SNAPSHOT</version>
+//  </parent>
+//<groupId>com.learnvest</groupId>
+//  <artifactId>blazewater-anno</artifactId>
+//<packaging>jar</packaging>
+//  <version>1.0-SNAPSHOT</version>
+//<name>blazewater-anno</name>
+
+//uploadArchives {
+//    repositories {
+//        mavenDeployer {
+//            beforeDeployment { MavenDeployment deployment -> signing.signPom(deployment) }
+//
+//            repository(url: "https://oss.sonatype.org/service/local/staging/deploy/maven2/") {
+//                authentication(userName: ossrhUsername, password: ossrhPassword)
+//            }
+//
+////            snapshotRepository(url: "https://oss.sonatype.org/content/repositories/snapshots/") {
+////                authentication(userName: ossrhUsername, password: ossrhPassword)
+////            }
+//
+//            pom.project {
+//                name 'graphql-java-directives'
+//                packaging 'jar'
+//                // optionally artifactId can be defined here
+//                description 'GraphqL Java with Custom Directives'
+//                url 'https://github.com/blevandowski-lv/graphql-java'
+//
+//                scm {
+//                    url "https://github.com/blevandowski-lv/graphql-java"
+//                    connection "scm:git:https://github.com/blevandowski-lv/graphql-java"
+//                    developerConnection "scm:git:https://github.com/blevandowski-lv/graphql-java"
+//                }
+//
+//                licenses {
+//                    license {
+//                        name 'The MIT License (MIT)'
+//                        url 'http://opensource.org/licenses/MIT'
+//                        distribution 'repo'
+//                    }
+//                }
+//
+//                developers {
+//                    developer {
+//                        id 'blevandowski'
+//                        name 'Brian Levandowski'
+//                    }
+//                }
+//            }
+//        }
+//    }
+//}
 
 publishing {
 
@@ -96,27 +163,27 @@ publishing {
                 }
                 pomNode.children().last() + {
                     resolveStrategy = Closure.DELEGATE_FIRST
-                    name 'graphql-java'
-                    description 'GraphqL Java'
-                    url "https://github.com/graphql-java/graphql-java"
+                    name 'graphql-java-directives'
+                    description 'GraphqL Java with Custom Directives'
+                    url "https://github.com/blevandowski-lv/graphql-java"
                     scm {
-                        url "https://github.com/graphql-java/graphql-java"
-                        connection "https://github.com/graphql-java/graphql-java"
-                        developerConnection "https://github.com/graphql-java/graphql-java"
+                        url "https://github.com/blevandowski-lv/graphql-java"
+                        connection "https://github.com/blevandowski-lv/graphql-java"
+                        developerConnection "https://github.com/blevandowski-lv/graphql-java"
                     }
-                    licenses {
-                        license {
-                            name 'MIT'
-                            url 'https://github.com/graphql-java/graphql-java/blob/master/LICENSE.md'
-                            distribution 'repo'
-                        }
-                    }
-                    developers {
-                        developer {
-                            id 'andimarek'
-                            name 'Andreas Marek'
-                        }
-                    }
+//                    licenses {
+//                        license {
+//                            name 'MIT'
+//                            url 'https://github.com/graphql-java/graphql-java/blob/master/LICENSE.md'
+//                            distribution 'repo'
+//                        }
+//                    }
+//                    developers {
+//                        developer {
+//                            id 'andimarek'
+//                            name 'Andreas Marek'
+//                        }
+//                    }
                 }
             }
         }
@@ -143,8 +210,7 @@ tasks.withType(PublishToMavenRepository) {
     dependsOn build
 }
 
-
 task wrapper(type: Wrapper) {
     gradleVersion = '3.4'
-    distributionUrl = "http://services.gradle.org/distributions/gradle-${gradleVersion}-all.zip"
+    distributionUrl = "https://services.gradle.org/distributions/gradle-${gradleVersion}-all.zip"
 }
