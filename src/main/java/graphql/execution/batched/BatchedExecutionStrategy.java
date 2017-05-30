@@ -257,6 +257,7 @@ public class BatchedExecutionStrategy extends ExecutionStrategy {
     }
 
     private Object coerce(GraphQLType type, Object value) {
+        if (value == null) return null;
         if (type instanceof GraphQLEnumType) {
             return ((GraphQLEnumType) type).getCoercing().serialize(value);
         } else {
@@ -312,7 +313,6 @@ public class BatchedExecutionStrategy extends ExecutionStrategy {
             log.warn("Exception while fetching data", e);
             handleDataFetchingException(executionContext, fieldDef, argumentValues, e);
         }
-        assert nodeData.size() == values.size();
 
         List<GraphQLExecutionNodeValue> retVal = new ArrayList<>();
         for (int i = 0; i < nodeData.size(); i++) {

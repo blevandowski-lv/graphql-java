@@ -1,5 +1,6 @@
 package graphql.schema.idl;
 
+import graphql.Assert;
 import graphql.PublicApi;
 import graphql.schema.DataFetcher;
 import graphql.schema.GraphQLScalarType;
@@ -20,11 +21,15 @@ public class RuntimeWiring {
     private final Map<String, Map<String, DataFetcher>> dataFetchers;
     private final Map<String, GraphQLScalarType> scalars;
     private final Map<String, TypeResolver> typeResolvers;
+    private Map<String, EnumValuesProvider> enumValuesProviders;
+    private final WiringFactory wiringFactory;
 
-    private RuntimeWiring(Map<String, Map<String, DataFetcher>> dataFetchers, Map<String, GraphQLScalarType> scalars, Map<String, TypeResolver> typeResolvers) {
+    private RuntimeWiring(Map<String, Map<String, DataFetcher>> dataFetchers, Map<String, GraphQLScalarType> scalars, Map<String, TypeResolver> typeResolvers, Map<String, EnumValuesProvider> enumValuesProviders, WiringFactory wiringFactory) {
         this.dataFetchers = dataFetchers;
         this.scalars = scalars;
         this.typeResolvers = typeResolvers;
+        this.wiringFactory = wiringFactory;
+        this.enumValuesProviders = enumValuesProviders;
     }
 
     public Map<String, GraphQLScalarType> getScalars() {
@@ -43,6 +48,14 @@ public class RuntimeWiring {
         return typeResolvers;
     }
 
+    public Map<String, EnumValuesProvider> getEnumValuesProviders() {
+        return this.enumValuesProviders;
+    }
+
+    public WiringFactory getWiringFactory() {
+        return wiringFactory;
+    }
+
     /**
      * @return a builder of Runtime Wiring
      */
@@ -55,16 +68,29 @@ public class RuntimeWiring {
         private final Map<String, Map<String, DataFetcher>> dataFetchers = new LinkedHashMap<>();
         private final Map<String, GraphQLScalarType> scalars = new LinkedHashMap<>();
         private final Map<String, TypeResolver> typeResolvers = new LinkedHashMap<>();
+        private final Map<String, EnumValuesProvider> enumValuesProviders = new LinkedHashMap<>();
+        private WiringFactory wiringFactory = new NoopWiringFactory();
 
         private Builder() {
             ScalarInfo.STANDARD_SCALARS.forEach(this::scalar);
         }
 
         /**
+         * Adds a wiring factory into the runtime wiring
+         *
+         * @param wiringFactory the wiring factory to add
+         * @return this outer builder
+         */
+        public Builder wiringFactory(WiringFactory wiringFactory) {
+            Assert.assertNotNull(wiringFactory, "You must provide a wiring factory");
+            this.wiringFactory = wiringFactory;
+            return this;
+        }
+
+        /**
          * This allows you to add in new custom Scalar implementations beyond the standard set.
          *
          * @param scalarType the new scalar implementation
-         *
          * @return the runtime wiring builder
          */
         public Builder scalar(GraphQLScalarType scalarType) {
@@ -76,7 +102,6 @@ public class RuntimeWiring {
          * This allows you to add a new type wiring via a builder
          *
          * @param builder the type wiring builder to use
-         *
          * @return this outer builder
          */
         public Builder type(TypeRuntimeWiring.Builder builder) {
@@ -86,9 +111,8 @@ public class RuntimeWiring {
         /**
          * This form allows a lambda to be used as the builder of a type wiring
          *
-         * @param typeName the name of the type to wire
+         * @param typeName        the name of the type to wire
          * @param builderFunction a function that will be given the builder to use
-         *
          * @return the runtime wiring builder
          */
         public Builder type(String typeName, UnaryOperator<TypeRuntimeWiring.Builder> builderFunction) {
@@ -100,7 +124,6 @@ public class RuntimeWiring {
          * This adds a type wiring
          *
          * @param typeRuntimeWiring the new type wiring
-         *
          * @return the runtime wiring builder
          */
         public Builder type(TypeRuntimeWiring typeRuntimeWiring) {
@@ -112,6 +135,11 @@ public class RuntimeWiring {
             if (typeResolver != null) {
                 this.typeResolvers.put(typeName, typeResolver);
             }
+
+            EnumValuesProvider enumValuesProvider = typeRuntimeWiring.getEnumValuesProvider();
+            if (enumValuesProvider != null) {
+                this.enumValuesProviders.put(typeName, enumValuesProvider);
+            }
             return this;
         }
 
@@ -119,7 +147,7 @@ public class RuntimeWiring {
          * @return the built runtime wiring
          */
         public RuntimeWiring build() {
-            return new RuntimeWiring(dataFetchers, scalars, typeResolvers);
+            return new RuntimeWiring(dataFetchers, scalars, typeResolvers, enumValuesProviders, wiringFactory);
         }
 
     }

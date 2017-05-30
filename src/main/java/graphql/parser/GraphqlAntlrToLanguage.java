@@ -1,6 +1,7 @@
 package graphql.parser;
 
 
+import graphql.Internal;
 import graphql.ShouldNotHappenException;
 import graphql.language.AbstractNode;
 import graphql.language.Argument;
@@ -56,6 +57,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
+
+import static graphql.language.NullValue.Null;
+
+@Internal
 
 public class GraphqlAntlrToLanguage extends GraphqlBaseVisitor<Void> {
 
@@ -535,7 +540,7 @@ public class GraphqlAntlrToLanguage extends GraphqlBaseVisitor<Void> {
         InputValueDefinition def = new InputValueDefinition(ctx.name().getText());
         newNode(def, ctx);
         if (ctx.defaultValue() != null) {
-            def.setValue(getValue(ctx.defaultValue().value()));
+            def.setDefaultValue(getValue(ctx.defaultValue().value()));
         }
         for (ContextEntry contextEntry : contextStack) {
             if (contextEntry.contextProperty == ContextProperty.FieldDefinition) {
@@ -666,6 +671,9 @@ public class GraphqlAntlrToLanguage extends GraphqlBaseVisitor<Void> {
             BooleanValue booleanValue = new BooleanValue(Boolean.parseBoolean(ctx.BooleanValue().getText()));
             newNode(booleanValue, ctx);
             return booleanValue;
+        } else if (ctx.NullValue() != null) {
+            newNode(Null, ctx);
+            return Null;
         } else if (ctx.StringValue() != null) {
             StringValue stringValue = new StringValue(parseString(ctx.StringValue().getText()));
             newNode(stringValue, ctx);
@@ -711,6 +719,9 @@ public class GraphqlAntlrToLanguage extends GraphqlBaseVisitor<Void> {
             BooleanValue booleanValue = new BooleanValue(Boolean.parseBoolean(ctx.BooleanValue().getText()));
             newNode(booleanValue, ctx);
             return booleanValue;
+        } else if (ctx.NullValue() != null) {
+            newNode(Null, ctx);
+            return Null;
         } else if (ctx.StringValue() != null) {
             StringValue stringValue = new StringValue(parseString(ctx.StringValue().getText()));
             newNode(stringValue, ctx);
@@ -739,7 +750,7 @@ public class GraphqlAntlrToLanguage extends GraphqlBaseVisitor<Void> {
         throw new ShouldNotHappenException();
     }
 
-    private String parseString(String string) {
+    static String parseString(String string) {
         StringWriter writer = new StringWriter(string.length() - 2);
         int end = string.length() - 1;
         for (int i = 1; i < end; i++) {
@@ -776,7 +787,8 @@ public class GraphqlAntlrToLanguage extends GraphqlBaseVisitor<Void> {
                     writer.write('\t');
                     continue;
                 case 'u':
-                    int codepoint = Integer.parseInt(string.substring(i + 1, i + 5), 16);
+                    String hexStr = string.substring(i + 1, i + 5);
+                    int codepoint = Integer.parseInt(hexStr, 16);
                     i += 4;
                     writer.write(codepoint);
                     continue;
@@ -820,11 +832,11 @@ public class GraphqlAntlrToLanguage extends GraphqlBaseVisitor<Void> {
             // we strip the leading hash # character but we don't trim because we don't
             // know the "comment markup".  Maybe its space sensitive, maybe its not.  So
             // consumers can decide that
-            text = (text == null) ? "" : text;
-            text = text.replaceFirst("^#", "");
-            if (text.length() > 0) {
-                comments.add(new Comment(text, new SourceLocation(refTok.getLine(), refTok.getCharPositionInLine())));
+            if (text == null) {
+                continue;
             }
+            text = text.replaceFirst("^#", "");
+            comments.add(new Comment(text, new SourceLocation(refTok.getLine(), refTok.getCharPositionInLine())));
         }
         return comments;
     }

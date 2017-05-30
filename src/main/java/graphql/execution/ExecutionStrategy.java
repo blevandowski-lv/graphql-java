@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import java.util.*;
 
 import static graphql.Directives.CalculationDirective;
+import graphql.schema.DataFetcher;
 import graphql.schema.DataFetchingEnvironment;
 import graphql.schema.DataFetchingEnvironmentImpl;
 import graphql.schema.DataFetchingFieldSelectionSet;
@@ -64,6 +65,7 @@ public abstract class ExecutionStrategy {
      * @param argumentValues   the map of arguments
      * @param e                the exception that occurred
      */
+    @SuppressWarnings("unused")
     protected void handleDataFetchingException(
             ExecutionContext executionContext,
             GraphQLFieldDefinition fieldDef,
@@ -97,13 +99,14 @@ public abstract class ExecutionStrategy {
 
         Instrumentation instrumentation = executionContext.getInstrumentation();
 
-        InstrumentationContext<ExecutionResult> fieldCtx = instrumentation.beginField(new FieldParameters(executionContext, fieldDef));
+        InstrumentationContext<ExecutionResult> fieldCtx = instrumentation.beginField(new FieldParameters(executionContext, fieldDef, environment));
 
         InstrumentationContext<Object> fetchCtx = instrumentation.beginFieldFetch(new FieldFetchParameters(executionContext, fieldDef, environment));
         Object resolvedValue = null;
         Object calculation = null;
         try {
-            resolvedValue = fieldDef.getDataFetcher().get(environment);
+            DataFetcher dataFetcher = fieldDef.getDataFetcher();
+            resolvedValue = dataFetcher.get(environment);
 
             for (Directive directive : field.getDirectives()) {
                 if (directive.getName().equals(CalculationDirective.getName()))
@@ -123,11 +126,15 @@ public abstract class ExecutionStrategy {
                 .build();
 
 
+        NonNullableFieldValidator nonNullableFieldValidator = new NonNullableFieldValidator(executionContext, fieldTypeInfo);
+
         ExecutionParameters newParameters = ExecutionParameters.newParameters()
                 .typeInfo(fieldTypeInfo)
                 .fields(parameters.fields())
                 .arguments(argumentValues)
-                .source(resolvedValue).build();
+                .source(resolvedValue)
+                .nonNullFieldValidator(nonNullableFieldValidator)
+                .build();
 
         ExecutionResult result = completeValue(executionContext, newParameters, fields, calculation);
 
@@ -145,21 +152,18 @@ public abstract class ExecutionStrategy {
         GraphQLType fieldType = parameters.typeInfo().type();
 
         if (result == null) {
-            if (typeInfo.typeIsNonNull()) {
-                // see http://facebook.github.io/graphql/#sec-Errors-and-Non-Nullability
-                NonNullableFieldWasNullException nonNullException = new NonNullableFieldWasNullException(typeInfo);
-                executionContext.addError(nonNullException);
-                throw nonNullException;
-            }
-            return null;
+            return parameters.nonNullFieldValidator().validate(null);
         } else if (fieldType instanceof GraphQLList) {
             return completeValueForList(executionContext, parameters, fields, toIterable(result));
         } else if (fieldType instanceof GraphQLScalarType) {
-            return completeValueForScalar((GraphQLScalarType) fieldType, result, calculation);
+            return completeValueForScalar((GraphQLScalarType) fieldType, parameters, result, calculation);
         } else if (fieldType instanceof GraphQLEnumType) {
-            return completeValueForEnum((GraphQLEnumType) fieldType, result, calculation);
+            return completeValueForEnum((GraphQLEnumType) fieldType, parameters, result, calculation);
         }
 
+
+        // when we are here, we have a complex type: Interface, Union or Object
+        // and we must go deeper
 
         GraphQLObjectType resolvedType;
         if (fieldType instanceof GraphQLInterfaceType) {
@@ -190,9 +194,13 @@ public abstract class ExecutionStrategy {
 
         Map<String, List<Field>> subFields = fieldCollector.collectFields(collectorParameters, fields);
 
+        TypeInfo newTypeInfo = typeInfo.asType(resolvedType);
+        NonNullableFieldValidator nonNullableFieldValidator = new NonNullableFieldValidator(executionContext, newTypeInfo);
+
         ExecutionParameters newParameters = ExecutionParameters.newParameters()
-                .typeInfo(typeInfo.asType(resolvedType))
+                .typeInfo(newTypeInfo)
                 .fields(subFields)
+                .nonNullFieldValidator(nonNullableFieldValidator)
                 .source(result).build();
 
         // Calling this from the executionContext to ensure we shift back from mutation strategy to the query strategy.
@@ -235,22 +243,27 @@ public abstract class ExecutionStrategy {
         return result;
     }
 
-    protected ExecutionResult completeValueForEnum(GraphQLEnumType enumType, Object result, Object calculation) {
+    protected ExecutionResult completeValueForEnum(GraphQLEnumType enumType, ExecutionParameters parameters, Object result, Object calculation) {
+
+        Object serialized = enumType.getCoercing().serialize(result);
+        serialized = parameters.nonNullFieldValidator().validate(serialized);
+
         if(calculation != null){
             Map<Object, Object> calcMap = new HashMap<>();
             calcMap.put("calculation", calculation);
-            return new ExecutionResultImpl(enumType.getCoercing().serialize(result), null, calcMap);
+            return new ExecutionResultImpl(serialized, null, calcMap);
         }
 
-        return new ExecutionResultImpl(enumType.getCoercing().serialize(result), null);
+        return new ExecutionResultImpl(serialized, null);
     }
 
-    protected ExecutionResult completeValueForScalar(GraphQLScalarType scalarType, Object result, Object calculation) {
+    protected ExecutionResult completeValueForScalar(GraphQLScalarType scalarType, ExecutionParameters parameters, Object result, Object calculation) {
         Object serialized = scalarType.getCoercing().serialize(result);
         //6.6.1 http://facebook.github.io/graphql/#sec-Field-entries
         if (serialized instanceof Double && ((Double) serialized).isNaN()) {
             serialized = null;
         }
+        serialized = parameters.nonNullFieldValidator().validate(serialized);
         if(calculation != null){
             Map<Object, Object> calcMap = new HashMap<>();
             calcMap.put("calculation", calculation);
@@ -265,9 +278,13 @@ public abstract class ExecutionStrategy {
         GraphQLList fieldType = typeInfo.castType(GraphQLList.class);
         for (Object item : result) {
 
+            TypeInfo wrappedTypeInfo = typeInfo.asType(fieldType.getWrappedType());
+            NonNullableFieldValidator nonNullableFieldValidator = new NonNullableFieldValidator(executionContext, wrappedTypeInfo);
+
             ExecutionParameters newParameters = ExecutionParameters.newParameters()
-                    .typeInfo(typeInfo.asType(fieldType.getWrappedType()))
+                    .typeInfo(wrappedTypeInfo)
                     .fields(parameters.fields())
+                    .nonNullFieldValidator(nonNullableFieldValidator)
                     .source(item).build();
 
             ExecutionResult completedValue = completeValue(executionContext, newParameters, fields);

@@ -282,6 +282,7 @@ three: [Number] @three
 schema @d1 @d2 {
     query: OpType1
     mutation: OpType2
+    subscription: OpType3
 }
 """
 
@@ -293,6 +294,8 @@ schema @d1 @d2 {
                 .add(new OperationTypeDefinition("query", new TypeName("OpType1")))
         schema.getOperationTypeDefinitions()
                 .add(new OperationTypeDefinition("mutation", new TypeName("OpType2")))
+        schema.getOperationTypeDefinitions()
+                .add(new OperationTypeDefinition("subscription", new TypeName("OpType3")))
 
         when:
         def document = new Parser().parseDocument(input)
@@ -369,7 +372,7 @@ directive @DirectiveName(arg1:String arg2:Int=23) on FIELD | QUERY
 
 
     List<String> commentContent(List<Comment> comments) {
-        comments.stream().map {c -> c.content}.collect(Collectors.toList())
+        comments.stream().map { c -> c.content }.collect(Collectors.toList())
     }
 
     def "comment support on definitions"() {
@@ -444,7 +447,6 @@ input Gun {
         commentContent(schemaDef.comments) == ["schema comment 1", "       schema comment 2 with leading spaces"]
         commentContent(schemaDef.operationTypeDefinitions[0].comments) == [" schema operation comment query"]
         commentContent(schemaDef.operationTypeDefinitions[1].comments) == [" schema operation comment mutation"]
-
         ObjectTypeDefinition typeDef = document.definitions[1] as ObjectTypeDefinition
         commentContent(typeDef.comments) == [" type query comment 1", " type query comment 2"]
         commentContent(typeDef.fieldDefinitions[0].comments) == [" query field 'hero' comment"]
@@ -470,4 +472,26 @@ input Gun {
 
     }
 
+    def "comments on field arguments"() {
+        def input = """
+        type QueryType {
+          hero(
+              #comment about episode
+              episode: Episode
+              # second
+              foo: String = \"bar\"
+          ): Character
+        }
+"""
+        when:
+        def document = new Parser().parseDocument(input)
+
+        then:
+        ObjectTypeDefinition typeDef = document.definitions[0] as ObjectTypeDefinition
+        def inputValueDefinitions = typeDef.fieldDefinitions[0].inputValueDefinitions
+        commentContent(inputValueDefinitions[0].comments) == ["comment about episode"]
+        commentContent(inputValueDefinitions[1].comments) == [" second"]
+    }
+
 }
+

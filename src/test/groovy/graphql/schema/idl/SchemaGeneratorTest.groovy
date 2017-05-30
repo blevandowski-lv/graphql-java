@@ -2,9 +2,13 @@ package graphql.schema.idl
 
 import graphql.TypeResolutionEnvironment
 import graphql.schema.*
+import graphql.schema.idl.errors.NotAnInputTypeError
+import graphql.schema.idl.errors.NotAnOutputTypeError
 import spock.lang.Specification
 
 import java.util.function.UnaryOperator
+
+import static graphql.Scalars.*
 
 class SchemaGeneratorTest extends Specification {
 
@@ -22,7 +26,7 @@ class SchemaGeneratorTest extends Specification {
 
 
     GraphQLSchema generateSchema(String schemaSpec, RuntimeWiring wiring) {
-        def typeRegistry = new SchemaCompiler().compile(schemaSpec)
+        def typeRegistry = new SchemaParser().parse(schemaSpec)
         def result = new SchemaGenerator().makeExecutableSchema(typeRegistry, wiring)
         result
     }
@@ -65,11 +69,10 @@ class SchemaGeneratorTest extends Specification {
 
         def authorField = schema.getQueryType().getFieldDefinition("author")
         assert authorField.type.name == "Author"
-        assert authorField.description == "author query must receive an id as argument"
+        assert authorField.description == " author query must receive an id as argument"
         assert authorField.arguments.get(0).name == "id"
         assert authorField.arguments.get(0).type instanceof GraphQLNonNull
         assert unwrap(authorField.arguments.get(0).type).name == "Int"
-
 
         //type Post {
         //    id: Int!
@@ -124,10 +127,9 @@ class SchemaGeneratorTest extends Specification {
         assert (unwrap(upvotePostFieldArg.type) as GraphQLInputObjectType).getField("votes").type.name == "Int"
 
         def queryType = schema.getQueryType()
-        assert queryType.description == "the schema allows the following query\nto be made"
+        assert queryType.description == " the schema allows the following query\n to be made"
 
     }
-
 
 
     def "test simple schema generate"() {
@@ -185,6 +187,7 @@ class SchemaGeneratorTest extends Specification {
         commonSchemaAsserts(schema)
     }
 
+
     def "schema can come from multiple sources and be bound together"() {
         def schemaSpec1 = """
             type Author {
@@ -207,7 +210,6 @@ class SchemaGeneratorTest extends Specification {
         """
 
         def schemaSpec3 = """
-
             # the schema allows the following query
             # to be made
             type Query {
@@ -241,9 +243,9 @@ class SchemaGeneratorTest extends Specification {
             }
         """
 
-        def typeRegistry1 = new SchemaCompiler().compile(schemaSpec1)
-        def typeRegistry2 = new SchemaCompiler().compile(schemaSpec2)
-        def typeRegistry3 = new SchemaCompiler().compile(schemaSpec3)
+        def typeRegistry1 = new SchemaParser().parse(schemaSpec1)
+        def typeRegistry2 = new SchemaParser().parse(schemaSpec2)
+        def typeRegistry3 = new SchemaParser().parse(schemaSpec3)
 
         typeRegistry1.merge(typeRegistry2).merge(typeRegistry3)
 
@@ -254,13 +256,168 @@ class SchemaGeneratorTest extends Specification {
         commonSchemaAsserts(schema)
 
 
+    }
+
+    def "union type: union member used two times "() {
+        def spec = """     
+            type Query {
+                foobar: FooOrBar
+                foo: Foo
+            }
+            
+            type Foo {
+               name: String 
+            }
+            
+            type Bar {
+                other: String
+            }
+            
+            union FooOrBar = Foo | Bar
+            
+            schema {
+              query: Query
+            }
+        """
+
+        def schema = generateSchema(spec, RuntimeWiring.newRuntimeWiring()
+                .type("FooOrBar", buildResolver())
+                .build())
+
+
+        expect:
+
+        def foobar = schema.getQueryType().getFieldDefinition("foobar")
+        foobar.type instanceof GraphQLUnionType
+        def types = ((GraphQLUnionType) foobar.type).getTypes()
+        types.size() == 2
+        types[0] instanceof GraphQLObjectType
+        types[1] instanceof GraphQLObjectType
+        types[0].name == "Foo"
+        types[1].name == "Bar"
+
+    }
+
+    def "union type: union members only used once"() {
+        def spec = """     
+            type Query {
+                foobar: FooOrBar
+            }
+            
+            type Foo {
+               name: String 
+            }
+            
+            type Bar {
+                other: String
+            }
+            
+            union FooOrBar = Foo | Bar
+            
+            schema {
+              query: Query
+            }
+        """
+
+        def schema = generateSchema(spec, RuntimeWiring.newRuntimeWiring()
+                .type("FooOrBar", buildResolver())
+                .build())
+
+
+        expect:
+
+        def foobar = schema.getQueryType().getFieldDefinition("foobar")
+        foobar.type instanceof GraphQLUnionType
+        def types = ((GraphQLUnionType) foobar.type).getTypes()
+        types.size() == 2
+        types[0] instanceof GraphQLObjectType
+        types[1] instanceof GraphQLObjectType
+        types[0].name == "Foo"
+        types[1].name == "Bar"
+
+    }
+
+    def "union type: union declared before members"() {
+        def spec = """     
+            union FooOrBar = Foo | Bar
+            
+            type Foo {
+               name: String 
+            }
+            
+            type Bar {
+                other: String
+            }
+            
+            type Query {
+                foobar: FooOrBar
+            }
+            
+            schema {
+              query: Query
+            }
+        """
+
+        def schema = generateSchema(spec, RuntimeWiring.newRuntimeWiring()
+                .type("FooOrBar", buildResolver())
+                .build())
+
+
+        expect:
+
+        def foobar = schema.getQueryType().getFieldDefinition("foobar")
+        foobar.type instanceof GraphQLUnionType
+        def types = ((GraphQLUnionType) foobar.type).getTypes()
+        types.size() == 2
+        types[0] instanceof GraphQLObjectType
+        types[1] instanceof GraphQLObjectType
+        types[0].name == "Foo"
+        types[1].name == "Bar"
+
+    }
+
+    def "union type: recursive definition via union type: Foo -> FooOrBar -> Foo  "() {
+        def spec = """     
+
+            schema {
+              query: Foo
+            }
+            
+            type Foo {
+                foobar: FooOrBar
+            }
+            
+            union FooOrBar = Foo | Bar
+            
+            type Bar {
+                other: String
+            }
+            
+            
+
+        """
+
+        def schema = generateSchema(spec, RuntimeWiring.newRuntimeWiring()
+                .type("FooOrBar", buildResolver())
+                .build())
+
+
+        expect:
+
+        def foobar = schema.getQueryType().getFieldDefinition("foobar")
+        foobar.type instanceof GraphQLUnionType
+        def types = ((GraphQLUnionType) foobar.type).getTypes()
+        types.size() == 2
+        types[0] instanceof GraphQLObjectType
+        types[1] instanceof GraphQLObjectType
+        types[0].name == "Foo"
+        types[1].name == "Bar"
 
     }
 
     def "enum types are handled"() {
 
         def spec = """     
-
             enum RGB {
                 RED
                 GREEN
@@ -274,7 +431,6 @@ class SchemaGeneratorTest extends Specification {
             schema {
               query: Query
             }
-
         """
 
         def schema = generateSchema(spec, RuntimeWiring.newRuntimeWiring().build())
@@ -292,7 +448,6 @@ class SchemaGeneratorTest extends Specification {
     def "interface types are handled"() {
 
         def spec = """     
-
             interface Foo {
                is_foo : Boolean
             }
@@ -309,7 +464,6 @@ class SchemaGeneratorTest extends Specification {
             schema {
               query: Query
             }
-
         """
 
         def wiring = RuntimeWiring.newRuntimeWiring()
@@ -332,21 +486,17 @@ class SchemaGeneratorTest extends Specification {
     def "type extensions can be specified multiple times #406"() {
 
         def spec = """
-
             interface Interface1 {
                extraField1 : String
             }     
-
             interface Interface2 {
                extraField1 : String
                extraField2 : Int
             }     
-
             interface Interface3 {
                extraField1 : String
                extraField3 : ID
             }     
-
             type BaseType {
                baseField : String
             }
@@ -354,25 +504,20 @@ class SchemaGeneratorTest extends Specification {
             extend type BaseType implements Interface1 {
                extraField1 : String
             }
-
             extend type BaseType implements Interface2 {
                extraField1 : String
                extraField2 : Int
             }
-
             extend type BaseType implements Interface3 {
                extraField1 : String
                extraField3 : ID
             }
-
             extend type BaseType {
                extraField4 : Boolean
             }
-
             extend type BaseType {
                extraField5 : Boolean!
             }
-
             #
             # if we repeat a definition, that's ok as long as its the same types as before
             # they will be de-duped since the effect is the same
@@ -384,7 +529,6 @@ class SchemaGeneratorTest extends Specification {
             schema {
               query: BaseType
             }
-
         """
 
         def wiring = RuntimeWiring.newRuntimeWiring()
@@ -431,11 +575,9 @@ class SchemaGeneratorTest extends Specification {
     def "read me type example makes sense"() {
 
         def spec = """             
-
             schema {
               query: Human
             }
-
             type Episode {
                 name : String
             }
@@ -448,12 +590,10 @@ class SchemaGeneratorTest extends Specification {
                 id: ID!
                 name: String!
             }
-
             extend type Human implements Character {
                 name: String!
                 friends: [Character]
             }
-
             extend type Human {
                 appearsIn: [Episode]!
                 homePlanet: String
@@ -479,8 +619,303 @@ class SchemaGeneratorTest extends Specification {
 
         type.interfaces.size() == 1
         type.interfaces[0].name == "Character"
+    }
+
+    def "Type used as inputType should throw appropriate error #425"() {
+        when:
+        def spec = """
+            schema {
+                query: Query
+            }
+            
+            type Query {
+                findCharacter(character: CharacterInput!): Boolean
+            }
+            
+            # CharacterInput must be an input, but is a type
+            type CharacterInput {
+                firstName: String
+                lastName: String
+                family: Boolean
+            }
+        """
+        def wiring = RuntimeWiring.newRuntimeWiring()
+                .build()
+
+        generateSchema(spec, wiring)
+
+        then:
+        def err = thrown(NotAnInputTypeError.class)
+        err.message == "expected InputType, but found CharacterInput type [@11:13]"
+    }
+
+    def "InputType used as type should throw appropriate error #425"() {
+        when:
+        def spec = """
+            schema {
+                query: Query
+            }
+            
+            type Query {
+                findCharacter: CharacterInput
+            }
+            
+            # CharacterInput must be an input, but is a type
+            input CharacterInput {
+                firstName: String
+                lastName: String
+                family: Boolean
+            }
+        """
+        def wiring = RuntimeWiring.newRuntimeWiring()
+                .build()
+
+        generateSchema(spec, wiring)
+
+        then:
+        def err = thrown(NotAnOutputTypeError.class)
+        err.message == "expected OutputType, but found CharacterInput type [@11:13]"
+    }
+
+    def "schema with subscription"() {
+        given:
+        def spec = """
+            schema {
+                query: Query
+                subscription: Subscription
+            }
+            type Query {
+                foo: String
+            }
+            
+            type Subscription {
+                foo: String 
+            }
+            """
+        when:
+        def wiring = RuntimeWiring.newRuntimeWiring()
+                .build()
+        def schema = generateSchema(spec, wiring)
+        then:
+        schema.getSubscriptionType().name == "Subscription"
+    }
 
 
+    def "comments are used as descriptions"() {
+        given:
+        def spec = """
+        #description 1
+        # description 2
+        type Query {
+            # description 3
+            foo: String
+            union: Union
+            interface(input: Input): Interface
+            enum: Enum
+        }
+        # description 4
+        union Union = Query
+        
+        # description 5
+        interface Interface {
+            # interface field
+            foo: String
+        }
+        # description 6 
+        input Input {
+            # input field
+            foo: String
+        }
+        # description 7
+        enum Enum {
+            # enum value
+            FOO
+        }
+        schema {
+          query: Query
+        }
+        """
+        when:
+        def wiring = RuntimeWiring.newRuntimeWiring()
+                .type("Union", buildResolver())
+                .type("Interface", buildResolver())
+                .build()
+        def schema = generateSchema(spec, wiring)
+
+        then:
+        schema.getQueryType().description == "description 1\n description 2"
+        schema.getQueryType().getFieldDefinition("foo").description == " description 3"
+        ((GraphQLUnionType) schema.getType("Union")).description == " description 4"
+
+        ((GraphQLInterfaceType) schema.getType("Interface")).description == " description 5"
+        ((GraphQLInterfaceType) schema.getType("Interface")).getFieldDefinition("foo").description == " interface field"
+
+        ((GraphQLInputObjectType) schema.getType("Input")).description == " description 6 "
+        ((GraphQLInputObjectType) schema.getType("Input")).getFieldDefinition("foo").description == " input field"
+
+        ((GraphQLEnumType) schema.getType("Enum")).description == " description 7"
+        ((GraphQLEnumType) schema.getType("Enum")).getValue("FOO").description == " enum value"
+    }
+
+    def "comments are separated from descriptions with empty lines"() {
+        given:
+        def spec = """
+        # should be ignored comment
+        #
+        # description 1
+        # description 2
+        type Query {
+            # this should be ignored
+            # and this
+            #
+            # and this after an empty line
+            # and the last one that should be ignored
+            # 
+            # description 3
+            # description 4
+            foo: String
+            # ignored and with not description following
+            #
+            bar: String
+        }
+        schema {
+          query: Query
+        }
+        """
+        when:
+        def wiring = RuntimeWiring.newRuntimeWiring()
+                .type("Union", buildResolver())
+                .type("Interface", buildResolver())
+                .build()
+        def schema = generateSchema(spec, wiring)
+
+        then:
+        schema.getQueryType().description == " description 1\n description 2"
+        schema.getQueryType().getFieldDefinition("foo").description == " description 3\n description 4"
+    }
+
+    enum ExampleEnum {
+        A,
+        B,
+        C
+    }
+
+    def "static enum values provider"() {
+        given:
+        def spec = """
+        type Query {
+            foo: Enum
+        }
+        enum Enum {
+            A
+            B
+            C 
+        }
+        schema {
+            query: Query
+        }
+        """
+        def enumValuesProvider = new NaturalEnumValuesProvider<ExampleEnum>(ExampleEnum.class)
+        when:
+
+        def wiring = RuntimeWiring.newRuntimeWiring()
+                .type("Enum", { TypeRuntimeWiring.Builder it -> it.enumValues(enumValuesProvider) } as UnaryOperator)
+                .build()
+        def schema = generateSchema(spec, wiring)
+        GraphQLEnumType enumType = schema.getType("Enum") as GraphQLEnumType
+
+        then:
+        enumType.getValue("A").value == ExampleEnum.A
+        enumType.getValue("B").value == ExampleEnum.B
+        enumType.getValue("C").value == ExampleEnum.C
+    }
+
+    def "enum with no values provider: value is the name"() {
+        given:
+        def spec = """
+        type Query {
+            foo: Enum
+        }
+        enum Enum {
+            A
+            B
+            C 
+        }
+        schema {
+            query: Query
+        }
+        """
+        when:
+        def wiring = RuntimeWiring.newRuntimeWiring()
+                .build()
+        def schema = generateSchema(spec, wiring)
+        GraphQLEnumType enumType = schema.getType("Enum") as GraphQLEnumType
+
+        then:
+        enumType.getValue("A").value == "A"
+        enumType.getValue("B").value == "B"
+        enumType.getValue("C").value == "C"
 
     }
+
+
+    def "schema is optional if there is a type called Query"() {
+
+        def spec = """     
+            type Query {
+              field : String
+            }
+            
+            type mutation {   # case matters this is not an implicit mutation
+              field : Int
+            }
+
+            type subscription { # case matters this is not an implicit subscription
+              field : Boolean
+            }
+        """
+
+        def schema = generateSchema(spec, RuntimeWiring.newRuntimeWiring().build())
+
+        expect:
+
+        schema != null
+        schema.getQueryType() != null
+        schema.getMutationType() == null
+        schema.getSubscriptionType() == null
+        schema.getQueryType().getFieldDefinition("field").getType() == GraphQLString
+
+    }
+
+    def "schema is optional if there is a type called Query while Mutation and Subscription will be found"() {
+
+        def spec = """     
+            type Query {
+              field : String
+            }
+
+            type Mutation {
+              field : Int
+            }
+
+            type Subscription {
+              field : Boolean
+            }
+        """
+
+        def schema = generateSchema(spec, RuntimeWiring.newRuntimeWiring().build())
+
+        expect:
+
+        schema != null
+        schema != null
+        schema.getQueryType() != null
+        schema.getMutationType() != null
+        schema.getSubscriptionType() != null
+        schema.getQueryType().getFieldDefinition("field").getType() == GraphQLString
+        schema.getMutationType().getFieldDefinition("field").getType() == GraphQLInt
+        schema.getSubscriptionType().getFieldDefinition("field").getType() == GraphQLBoolean
+
+    }
+
 }
