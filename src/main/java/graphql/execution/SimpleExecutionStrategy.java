@@ -22,7 +22,7 @@ public class SimpleExecutionStrategy extends ExecutionStrategy {
 
                 Map<Object, Object> extensions = resolvedResult != null ? resolvedResult.getExtensions() : null;
                 if(extensions != null && extensions.size() > 0)
-                    results.put(fieldName + " calculation", extensions.get("calculation"));
+                    results.put(fieldName + "Calculation", extensions.get("calculation"));
 
             } catch (NonNullableFieldWasNullException e) {
                 /*

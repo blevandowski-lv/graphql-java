@@ -74,7 +74,7 @@ uploadArchives {
             repository(url: "http://build.learnvest.net:8081/nexus/content/repositories/snapshots/libs-snapshots-local") {
                 authentication(userName: userName, password: password)
             }
-            pom.version = "1.0-SNAPSHOT"
+            pom.version = "1.1-SNAPSHOT"
             pom.artifactId = "graphql-java-directives"
             pom.groupId = "com.learnvest"
         }
